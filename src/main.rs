@@ -9,9 +9,12 @@ use ratatui::{
     layout::Flex,
     prelude::*,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    ops::Not,
+};
 
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq, Eq)]
 enum PieceType {
     Pawn,
     Knight,
@@ -49,7 +52,18 @@ impl PieceColor {
     }
 }
 
-#[derive(Clone, Copy)]
+impl Not for PieceColor {
+    type Output = Self;
+
+    fn not(self) -> Self::Output {
+        match self {
+            Self::White => Self::Black,
+            Self::Black => Self::White,
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
 struct Piece {
     color: PieceColor,
     piece: PieceType,
@@ -110,6 +124,7 @@ impl Position {
     }
 }
 
+#[derive(Clone)]
 struct Board(BTreeMap<Position, Piece>);
 
 impl Board {
@@ -151,9 +166,19 @@ impl Board {
     }
 
     /// REQUIRES: there is a piece at `from`
-    fn r#move(&mut self, from: Position, to: Position) {
-        let piece = self.0.remove(&from).expect("Board::r#move precondition");
-        self.0.insert(to, piece);
+    fn r#move(&self, from: Position, to: Position) -> Self {
+        // TODO: use im
+        let mut new = self.clone();
+        let piece = new.0.remove(&from).expect("Board::r#move precondition");
+        new.0.insert(to, piece);
+        new
+    }
+
+    fn pieces(&self, color: PieceColor) -> impl Iterator<Item = Position> + '_ {
+        self.0
+            .iter()
+            .filter(move |(_, piece)| piece.color == color)
+            .map(|(&position, _)| position)
     }
 }
 
@@ -170,24 +195,27 @@ impl Game {
     /// REQUIRES: there is a piece at this position
     /// TODO: promotion, en passant, castling
     /// meh, for now, just auto-promote to queen
-    fn moves(&self, position: &Position) -> BTreeSet<Position> {
-        let Piece { color, piece } = self.board.get(position).expect("Game::moves precondition");
-        let try_insert = |moves: &mut BTreeSet<Position>, p: Position| {
-            if position.is_valid() && self.board.get(&p).is_none_or(|other| other.color != *color) {
-                moves.insert(p);
+    /// TODO: make this calculate all moves so that:
+    /// - we can detect mate
+    /// - it bakes in whose turn it is
+    fn moves(&self, from: Position) -> BTreeSet<Position> {
+        let &Piece { color, piece } = self.board.get(&from).expect("Game::moves precondition");
+        let try_insert = |moves: &mut BTreeSet<Position>, to: Position| {
+            if to.is_valid() && self.board.get(&to).is_none_or(|other| other.color != color) {
+                moves.insert(to);
             }
         };
         let saturate = |moves: &mut BTreeSet<Position>, f: &dyn Fn(Position) -> Position| {
-            let mut moved = *position;
-            while moved.is_valid() {
-                moved = f(moved);
-                if let Some(other) = self.board.get(&moved) {
-                    if other.color != *color {
-                        moves.insert(moved);
+            let mut to = from;
+            while to.is_valid() {
+                to = f(to);
+                if let Some(other) = self.board.get(&to) {
+                    if other.color != color {
+                        moves.insert(to);
                     }
                     break;
                 } else {
-                    moves.insert(moved);
+                    moves.insert(to);
                 }
             }
         };
@@ -196,55 +224,55 @@ impl Game {
             PieceType::Pawn => match color {
                 // TODO: promotion, en passant
                 PieceColor::White => {
-                    try_insert(&mut moves, position.up());
-                    if position.rank == 1 {
-                        try_insert(&mut moves, position.up().up());
+                    try_insert(&mut moves, from.up());
+                    if from.rank == 1 {
+                        try_insert(&mut moves, from.up().up());
                     }
                     if self
                         .board
-                        .get(&position.up().right())
+                        .get(&from.up().right())
                         .is_some_and(|other| other.color == PieceColor::Black)
                     {
-                        try_insert(&mut moves, position.up().right());
+                        try_insert(&mut moves, from.up().right());
                     }
                     if self
                         .board
-                        .get(&position.up().left())
+                        .get(&from.up().left())
                         .is_some_and(|other| other.color == PieceColor::Black)
                     {
-                        try_insert(&mut moves, position.up().left());
+                        try_insert(&mut moves, from.up().left());
                     }
                 }
                 PieceColor::Black => {
-                    try_insert(&mut moves, position.down());
-                    if position.rank == 6 {
-                        try_insert(&mut moves, position.down().down());
+                    try_insert(&mut moves, from.down());
+                    if from.rank == 6 {
+                        try_insert(&mut moves, from.down().down());
                     }
                     if self
                         .board
-                        .get(&position.down().right())
+                        .get(&from.down().right())
                         .is_some_and(|other| other.color == PieceColor::White)
                     {
-                        try_insert(&mut moves, position.down().right());
+                        try_insert(&mut moves, from.down().right());
                     }
                     if self
                         .board
-                        .get(&position.down().left())
+                        .get(&from.down().left())
                         .is_some_and(|other| other.color == PieceColor::White)
                     {
-                        try_insert(&mut moves, position.down().left());
+                        try_insert(&mut moves, from.down().left());
                     }
                 }
             },
             PieceType::Knight => {
-                try_insert(&mut moves, position.up().up().left());
-                try_insert(&mut moves, position.up().up().right());
-                try_insert(&mut moves, position.left().left().up());
-                try_insert(&mut moves, position.left().left().down());
-                try_insert(&mut moves, position.down().down().left());
-                try_insert(&mut moves, position.down().down().right());
-                try_insert(&mut moves, position.right().right().up());
-                try_insert(&mut moves, position.right().right().down());
+                try_insert(&mut moves, from.up().up().left());
+                try_insert(&mut moves, from.up().up().right());
+                try_insert(&mut moves, from.left().left().up());
+                try_insert(&mut moves, from.left().left().down());
+                try_insert(&mut moves, from.down().down().left());
+                try_insert(&mut moves, from.down().down().right());
+                try_insert(&mut moves, from.right().right().up());
+                try_insert(&mut moves, from.right().right().down());
             }
             PieceType::Bishop => {
                 saturate(&mut moves, &|p| p.up().left());
@@ -270,23 +298,52 @@ impl Game {
             }
             PieceType::King => {
                 // TODO: castling
-                // TODO: avoid check
-                try_insert(&mut moves, position.up());
-                try_insert(&mut moves, position.up().right());
-                try_insert(&mut moves, position.right());
-                try_insert(&mut moves, position.down().right());
-                try_insert(&mut moves, position.down());
-                try_insert(&mut moves, position.down().left());
-                try_insert(&mut moves, position.left());
-                try_insert(&mut moves, position.up().left());
+                try_insert(&mut moves, from.up());
+                try_insert(&mut moves, from.up().right());
+                try_insert(&mut moves, from.right());
+                try_insert(&mut moves, from.down().right());
+                try_insert(&mut moves, from.down());
+                try_insert(&mut moves, from.down().left());
+                try_insert(&mut moves, from.left());
+                try_insert(&mut moves, from.up().left());
             }
         }
+        moves.retain(|&to| !self.r#move(from, to).check(color));
         moves
     }
 
     /// REQUIRES: there is a piece at `from`
-    fn r#move(&mut self, from: Position, to: Position) {
-        self.board.r#move(from, to);
+    fn r#move(&self, from: Position, to: Position) -> Self {
+        let board = self.board.r#move(from, to);
+        Self { board }
+    }
+
+    fn attacks(&self, color: PieceColor, position: Position) -> bool {
+        self.board
+            .pieces(color)
+            .any(|pos| self.moves(pos).contains(&position))
+    }
+
+    fn check(&self, color: PieceColor) -> bool {
+        let (&king_position, _) = self
+            .board
+            .0
+            .iter()
+            .find(|&(_, &piece)| {
+                piece
+                    == Piece {
+                        piece: PieceType::King,
+                        color,
+                    }
+            })
+            .expect("king always exists");
+        self.attacks(!color, king_position)
+    }
+
+    fn mate(&self, color: PieceColor) -> bool {
+        self.board
+            .pieces(color)
+            .all(|pos| self.moves(pos).is_empty())
     }
 }
 
@@ -300,10 +357,11 @@ impl Tui {
     fn new() -> Self {
         let game = Game::new();
         let click_targets = Vec::new();
+        let selected_tile = None;
         Self {
             game,
             click_targets,
-            selected_tile: None,
+            selected_tile,
         }
     }
 
@@ -363,7 +421,7 @@ impl Tui {
             .board
             .get(&position)
             .is_some()
-            .then(|| (position, self.game.moves(&position)));
+            .then(|| (position, self.game.moves(position)));
     }
 }
 

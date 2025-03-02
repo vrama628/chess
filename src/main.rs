@@ -11,7 +11,9 @@ use ratatui::{
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
+    fmt::Display,
     ops::Not,
+    process::ExitCode,
 };
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -59,6 +61,15 @@ impl Not for PieceColor {
         match self {
             Self::White => Self::Black,
             Self::Black => Self::White,
+        }
+    }
+}
+
+impl Display for PieceColor {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PieceColor::White => write!(f, "White"),
+            PieceColor::Black => write!(f, "Black"),
         }
     }
 }
@@ -124,6 +135,12 @@ impl Position {
     }
 }
 
+impl Display for Position {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}{}", (b'a' + self.file as u8) as char, self.rank + 1)
+    }
+}
+
 #[derive(Clone)]
 struct Board(BTreeMap<Position, Piece>);
 
@@ -166,7 +183,7 @@ impl Board {
     }
 
     /// REQUIRES: there is a piece at `from`
-    fn r#move(&self, from: Position, to: Position) -> Self {
+    fn r#move(&self, from: Position, to: Move) -> Self {
         // TODO: use im
         let mut new = self.clone();
         let piece = new.0.remove(&from).expect("Board::r#move precondition");
@@ -174,176 +191,208 @@ impl Board {
         new
     }
 
-    fn pieces(&self, color: PieceColor) -> impl Iterator<Item = Position> + '_ {
+    fn position_of(&self, piece: Piece) -> Option<Position> {
         self.0
             .iter()
-            .filter(move |(_, piece)| piece.color == color)
-            .map(|(&position, _)| position)
+            .find_map(|(&position, &p)| (p == piece).then_some(position))
     }
 }
 
 struct Game {
+    turn: PieceColor,
     board: Board,
+}
+
+// TODO: en passant, castling, promotion
+type Move = Position;
+
+enum Outcome {
+    Win(PieceColor),
+    Draw,
+}
+
+impl Display for Outcome {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Outcome::Win(color) => writeln!(f, "{color} wins!"),
+            Outcome::Draw => writeln!(f, "Draw!"),
+        }
+    }
 }
 
 impl Game {
     fn new() -> Self {
+        let turn = PieceColor::White;
         let board = Board::new();
-        Self { board }
+        Self { turn, board }
     }
 
-    /// REQUIRES: there is a piece at this position
     /// TODO: promotion, en passant, castling
-    /// meh, for now, just auto-promote to queen
-    /// TODO: make this calculate all moves so that:
-    /// - we can detect mate
-    /// - it bakes in whose turn it is
-    fn moves(&self, from: Position) -> BTreeSet<Position> {
-        let &Piece { color, piece } = self.board.get(&from).expect("Game::moves precondition");
-        let try_insert = |moves: &mut BTreeSet<Position>, to: Position| {
-            if to.is_valid() && self.board.get(&to).is_none_or(|other| other.color != color) {
-                moves.insert(to);
-            }
-        };
-        let saturate = |moves: &mut BTreeSet<Position>, f: &dyn Fn(Position) -> Position| {
-            let mut to = from;
-            while to.is_valid() {
-                to = f(to);
-                if let Some(other) = self.board.get(&to) {
-                    if other.color != color {
+    /// returns moves that can be made, but without filtering out moves that would put the king in check
+    fn potential_moves(&self, color: PieceColor) -> BTreeMap<Position, BTreeSet<Move>> {
+        self.board
+            .0
+            .iter()
+            .filter(|&(_, &piece)| piece.color == color)
+            .map(|(&from, &Piece { color, piece })| {
+                let try_insert = |moves: &mut BTreeSet<Position>, to: Position| {
+                    if to.is_valid() && self.board.get(&to).is_none_or(|other| other.color != color)
+                    {
                         moves.insert(to);
                     }
-                    break;
-                } else {
-                    moves.insert(to);
-                }
-            }
-        };
-        let mut moves = BTreeSet::new();
-        match piece {
-            PieceType::Pawn => match color {
-                // TODO: promotion, en passant
-                PieceColor::White => {
-                    try_insert(&mut moves, from.up());
-                    if from.rank == 1 {
-                        try_insert(&mut moves, from.up().up());
+                };
+                let saturate = |moves: &mut BTreeSet<Position>,
+                                f: &dyn Fn(Position) -> Position| {
+                    let mut to = from;
+                    while to.is_valid() {
+                        to = f(to);
+                        if let Some(other) = self.board.get(&to) {
+                            if other.color != color {
+                                moves.insert(to);
+                            }
+                            break;
+                        } else {
+                            moves.insert(to);
+                        }
                     }
-                    if self
-                        .board
-                        .get(&from.up().right())
-                        .is_some_and(|other| other.color == PieceColor::Black)
-                    {
+                };
+                let mut moves = BTreeSet::new();
+                match piece {
+                    PieceType::Pawn => match color {
+                        // TODO: promotion, en passant
+                        PieceColor::White => {
+                            if self.board.get(&from.up()).is_none() {
+                                moves.insert(from.up());
+                            }
+                            if from.rank == 1 && self.board.get(&from.up().up()).is_none() {
+                                moves.insert(from.up().up());
+                            }
+                            if self
+                                .board
+                                .get(&from.up().right())
+                                .is_some_and(|other| other.color == PieceColor::Black)
+                            {
+                                moves.insert(from.up().right());
+                            }
+                            if self
+                                .board
+                                .get(&from.up().left())
+                                .is_some_and(|other| other.color == PieceColor::Black)
+                            {
+                                moves.insert(from.up().left());
+                            }
+                        }
+                        PieceColor::Black => {
+                            if self.board.get(&from.down()).is_none() {
+                                moves.insert(from.down());
+                            }
+                            if from.rank == 6 && self.board.get(&from.down().down()).is_none() {
+                                moves.insert(from.down().down());
+                            }
+                            if self
+                                .board
+                                .get(&from.down().right())
+                                .is_some_and(|other| other.color == PieceColor::White)
+                            {
+                                moves.insert(from.down().right());
+                            }
+                            if self
+                                .board
+                                .get(&from.down().left())
+                                .is_some_and(|other| other.color == PieceColor::White)
+                            {
+                                moves.insert(from.down().left());
+                            }
+                        }
+                    },
+                    PieceType::Knight => {
+                        try_insert(&mut moves, from.up().up().left());
+                        try_insert(&mut moves, from.up().up().right());
+                        try_insert(&mut moves, from.left().left().up());
+                        try_insert(&mut moves, from.left().left().down());
+                        try_insert(&mut moves, from.down().down().left());
+                        try_insert(&mut moves, from.down().down().right());
+                        try_insert(&mut moves, from.right().right().up());
+                        try_insert(&mut moves, from.right().right().down());
+                    }
+                    PieceType::Bishop => {
+                        saturate(&mut moves, &|p| p.up().left());
+                        saturate(&mut moves, &|p| p.up().right());
+                        saturate(&mut moves, &|p| p.down().left());
+                        saturate(&mut moves, &|p| p.down().right());
+                    }
+                    PieceType::Rook => {
+                        saturate(&mut moves, &|p| p.up());
+                        saturate(&mut moves, &|p| p.left());
+                        saturate(&mut moves, &|p| p.down());
+                        saturate(&mut moves, &|p| p.right());
+                    }
+                    PieceType::Queen => {
+                        saturate(&mut moves, &|p| p.up());
+                        saturate(&mut moves, &|p| p.left());
+                        saturate(&mut moves, &|p| p.down());
+                        saturate(&mut moves, &|p| p.right());
+                        saturate(&mut moves, &|p| p.up().left());
+                        saturate(&mut moves, &|p| p.up().right());
+                        saturate(&mut moves, &|p| p.down().left());
+                        saturate(&mut moves, &|p| p.down().right());
+                    }
+                    PieceType::King => {
+                        // TODO: castling
+                        try_insert(&mut moves, from.up());
                         try_insert(&mut moves, from.up().right());
-                    }
-                    if self
-                        .board
-                        .get(&from.up().left())
-                        .is_some_and(|other| other.color == PieceColor::Black)
-                    {
+                        try_insert(&mut moves, from.right());
+                        try_insert(&mut moves, from.down().right());
+                        try_insert(&mut moves, from.down());
+                        try_insert(&mut moves, from.down().left());
+                        try_insert(&mut moves, from.left());
                         try_insert(&mut moves, from.up().left());
                     }
                 }
-                PieceColor::Black => {
-                    try_insert(&mut moves, from.down());
-                    if from.rank == 6 {
-                        try_insert(&mut moves, from.down().down());
-                    }
-                    if self
-                        .board
-                        .get(&from.down().right())
-                        .is_some_and(|other| other.color == PieceColor::White)
-                    {
-                        try_insert(&mut moves, from.down().right());
-                    }
-                    if self
-                        .board
-                        .get(&from.down().left())
-                        .is_some_and(|other| other.color == PieceColor::White)
-                    {
-                        try_insert(&mut moves, from.down().left());
-                    }
-                }
-            },
-            PieceType::Knight => {
-                try_insert(&mut moves, from.up().up().left());
-                try_insert(&mut moves, from.up().up().right());
-                try_insert(&mut moves, from.left().left().up());
-                try_insert(&mut moves, from.left().left().down());
-                try_insert(&mut moves, from.down().down().left());
-                try_insert(&mut moves, from.down().down().right());
-                try_insert(&mut moves, from.right().right().up());
-                try_insert(&mut moves, from.right().right().down());
-            }
-            PieceType::Bishop => {
-                saturate(&mut moves, &|p| p.up().left());
-                saturate(&mut moves, &|p| p.up().right());
-                saturate(&mut moves, &|p| p.down().left());
-                saturate(&mut moves, &|p| p.down().right());
-            }
-            PieceType::Rook => {
-                saturate(&mut moves, &|p| p.up());
-                saturate(&mut moves, &|p| p.left());
-                saturate(&mut moves, &|p| p.down());
-                saturate(&mut moves, &|p| p.right());
-            }
-            PieceType::Queen => {
-                saturate(&mut moves, &|p| p.up());
-                saturate(&mut moves, &|p| p.left());
-                saturate(&mut moves, &|p| p.down());
-                saturate(&mut moves, &|p| p.right());
-                saturate(&mut moves, &|p| p.up().left());
-                saturate(&mut moves, &|p| p.up().right());
-                saturate(&mut moves, &|p| p.down().left());
-                saturate(&mut moves, &|p| p.down().right());
-            }
-            PieceType::King => {
-                // TODO: castling
-                try_insert(&mut moves, from.up());
-                try_insert(&mut moves, from.up().right());
-                try_insert(&mut moves, from.right());
-                try_insert(&mut moves, from.down().right());
-                try_insert(&mut moves, from.down());
-                try_insert(&mut moves, from.down().left());
-                try_insert(&mut moves, from.left());
-                try_insert(&mut moves, from.up().left());
-            }
+                (from, moves)
+            })
+            .collect()
+    }
+
+    fn moves(&self, color: PieceColor) -> BTreeMap<Position, BTreeSet<Move>> {
+        let mut moves = self.potential_moves(color);
+        for (&from, moves) in &mut moves {
+            moves.retain(|&to| !self.r#move(from, to).check(color));
         }
-        moves.retain(|&to| !self.r#move(from, to).check(color));
         moves
     }
 
     /// REQUIRES: there is a piece at `from`
-    fn r#move(&self, from: Position, to: Position) -> Self {
+    fn r#move(&self, from: Position, to: Move) -> Self {
+        let turn = !self.turn;
         let board = self.board.r#move(from, to);
-        Self { board }
-    }
-
-    fn attacks(&self, color: PieceColor, position: Position) -> bool {
-        self.board
-            .pieces(color)
-            .any(|pos| self.moves(pos).contains(&position))
+        Self { turn, board }
     }
 
     fn check(&self, color: PieceColor) -> bool {
-        let (&king_position, _) = self
-            .board
-            .0
-            .iter()
-            .find(|&(_, &piece)| {
-                piece
-                    == Piece {
-                        piece: PieceType::King,
-                        color,
-                    }
-            })
-            .expect("king always exists");
-        self.attacks(!color, king_position)
+        let king = Piece {
+            piece: PieceType::King,
+            color,
+        };
+        let king_position = self.board.position_of(king).expect("king always exists");
+        self.potential_moves(!color)
+            .values()
+            .any(|moves| moves.contains(&king_position))
     }
 
     fn mate(&self, color: PieceColor) -> bool {
-        self.board
-            .pieces(color)
-            .all(|pos| self.moves(pos).is_empty())
+        self.moves(color).values().all(|moves| moves.is_empty())
+    }
+
+    /// returns None if the game is still in progress
+    fn status(&self) -> Option<Outcome> {
+        self.mate(self.turn).then(|| {
+            if self.check(self.turn) {
+                Outcome::Win(!self.turn)
+            } else {
+                Outcome::Draw
+            }
+        })
     }
 }
 
@@ -365,16 +414,18 @@ impl Tui {
         }
     }
 
-    fn run<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> std::io::Result<()> {
-        // TODO: loop only if game is in progress
-        loop {
+    fn run<B: Backend>(&mut self, terminal: &mut Terminal<B>) -> std::io::Result<Option<Outcome>> {
+        let outcome = loop {
+            if let Some(outcome) = self.game.status() {
+                break Some(outcome);
+            }
             terminal.draw(|frame| frame.render_widget(&mut *self, frame.area()))?;
             let event = event::read()?;
             if self.handle(event) {
-                break;
+                break None;
             }
-        }
-        Ok(())
+        };
+        return Ok(outcome);
     }
 
     /// returns whether to exit
@@ -396,13 +447,13 @@ impl Tui {
                 for &(rect, position) in &self.click_targets {
                     if rect.contains(click) {
                         match self.selected_tile {
-                            None => self.set_selected_tile(position),
+                            None => self.select_tile(position),
                             Some((from, ref moves)) => {
                                 if moves.contains(&position) {
-                                    self.game.r#move(from, position);
+                                    self.game = self.game.r#move(from, position);
                                     self.selected_tile = None;
                                 } else {
-                                    self.set_selected_tile(position);
+                                    self.select_tile(position);
                                 }
                             }
                         }
@@ -415,13 +466,8 @@ impl Tui {
         }
     }
 
-    fn set_selected_tile(&mut self, position: Position) {
-        self.selected_tile = self
-            .game
-            .board
-            .get(&position)
-            .is_some()
-            .then(|| (position, self.game.moves(position)));
+    fn select_tile(&mut self, position: Position) {
+        self.selected_tile = self.game.moves(self.game.turn).remove_entry(&position)
     }
 }
 
@@ -442,6 +488,8 @@ impl Widget for &mut Tui {
                 if let Some(piece) = self.game.board.get(&position) {
                     line.push_span(piece.render())
                 } else {
+                    // hack to work around a bug in ratatui where
+                    // the Line's style doesn't render if the content is empty
                     line.push_span(" ")
                 }
                 if self
@@ -465,20 +513,33 @@ impl Widget for &mut Tui {
     }
 }
 
-fn main() -> Result<(), std::io::Error> {
+fn main() -> ExitCode {
     let mut tui = Tui::new();
     let mut terminal = ratatui::init();
     terminal
         .backend_mut()
         .writer_mut()
-        .execute(EnableMouseCapture)?;
-    if let Err(e) = tui.run(&mut terminal) {
-        eprintln!("{e}");
-    }
+        .execute(EnableMouseCapture)
+        .expect("enable mouse capture");
+    let result = tui.run(&mut terminal);
     terminal
         .backend_mut()
         .writer_mut()
-        .execute(DisableMouseCapture)?;
+        .execute(DisableMouseCapture)
+        .expect("disable mouse capture");
     ratatui::restore();
-    Ok(())
+    match result {
+        Ok(outcome) => {
+            if let Some(outcome) = outcome {
+                println!("Outcome: {outcome}");
+            } else {
+                println!("Quit before game ended");
+            }
+            ExitCode::SUCCESS
+        }
+        Err(e) => {
+            eprintln!("ERROR: {e}");
+            ExitCode::FAILURE
+        }
+    }
 }

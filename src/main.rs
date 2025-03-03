@@ -52,6 +52,13 @@ impl PieceColor {
             Self::Black => Color::Black,
         }
     }
+
+    fn pawn_starting_rank(&self) -> usize {
+        match self {
+            Self::White => 1,
+            Self::Black => 6,
+        }
+    }
 }
 
 impl Not for PieceColor {
@@ -132,6 +139,13 @@ impl Position {
 
     fn is_valid(&self) -> bool {
         self.rank < 8 && self.file < 8
+    }
+
+    fn pawn(&self, color: PieceColor) -> Self {
+        match color {
+            PieceColor::White => self.up(),
+            PieceColor::Black => self.down(),
+        }
     }
 }
 
@@ -214,6 +228,8 @@ impl Board {
 struct Game {
     turn: PieceColor,
     board: Board,
+    /// for en passant
+    just_advanced_two: Option<Position>,
 }
 
 // TODO: en passant, castling, promotion
@@ -237,11 +253,16 @@ impl Game {
     fn new() -> Self {
         let turn = PieceColor::White;
         let board = Board::new();
-        Self { turn, board }
+        let just_advanced_two = None;
+        Self {
+            turn,
+            board,
+            just_advanced_two,
+        }
     }
 
-    /// TODO: promotion, en passant, castling
-    /// returns moves that can be made, but without filtering out moves that would put the king in check
+    /// TODO: castling
+    /// returns moves that can be made, but without filtering out moves into check
     fn potential_moves(&self, color: PieceColor) -> BTreeMap<Position, BTreeSet<Move>> {
         self.board
             .0
@@ -271,53 +292,58 @@ impl Game {
                 };
                 let mut moves = BTreeSet::new();
                 match piece {
-                    PieceType::Pawn => match color {
-                        // TODO: promotion, en passant
-                        PieceColor::White => {
-                            if self.board.get(&from.up()).is_none() {
-                                moves.insert(from.up());
-                            }
-                            if from.rank == 1 && self.board.get(&from.up().up()).is_none() {
-                                moves.insert(from.up().up());
-                            }
-                            if self
-                                .board
-                                .get(&from.up().right())
-                                .is_some_and(|other| other.color == PieceColor::Black)
-                            {
-                                moves.insert(from.up().right());
-                            }
-                            if self
-                                .board
-                                .get(&from.up().left())
-                                .is_some_and(|other| other.color == PieceColor::Black)
-                            {
-                                moves.insert(from.up().left());
-                            }
+                    PieceType::Pawn => {
+                        let forward = from.pawn(color);
+                        if self.board.get(&forward).is_none() {
+                            moves.insert(forward);
                         }
-                        PieceColor::Black => {
-                            if self.board.get(&from.down()).is_none() {
-                                moves.insert(from.down());
-                            }
-                            if from.rank == 6 && self.board.get(&from.down().down()).is_none() {
-                                moves.insert(from.down().down());
-                            }
-                            if self
-                                .board
-                                .get(&from.down().right())
-                                .is_some_and(|other| other.color == PieceColor::White)
-                            {
-                                moves.insert(from.down().right());
-                            }
-                            if self
-                                .board
-                                .get(&from.down().left())
-                                .is_some_and(|other| other.color == PieceColor::White)
-                            {
-                                moves.insert(from.down().left());
-                            }
+
+                        let forward_two = forward.pawn(color);
+                        if from.rank == color.pawn_starting_rank()
+                            && self.board.get(&forward).is_none()
+                            && self.board.get(&forward_two).is_none()
+                        {
+                            moves.insert(forward_two);
                         }
-                    },
+
+                        let capture_left = forward.left();
+                        if self
+                            .board
+                            .get(&capture_left)
+                            .is_some_and(|other| other.color == !color)
+                            || self.just_advanced_two.is_some_and(|position| {
+                                // en passant
+                                position == from.left()
+                                    && self
+                                        .board
+                                        .get(&position)
+                                        .expect("Game::just_advanced_two invariant")
+                                        .color
+                                        == !color
+                            })
+                        {
+                            moves.insert(capture_left);
+                        }
+
+                        let capture_right = forward.right();
+                        if self
+                            .board
+                            .get(&capture_right)
+                            .is_some_and(|other| other.color == !color)
+                            || self.just_advanced_two.is_some_and(|position| {
+                                // en passant
+                                position == from.right()
+                                    && self
+                                        .board
+                                        .get(&position)
+                                        .expect("Game::just_advanced_two invariant")
+                                        .color
+                                        == !color
+                            })
+                        {
+                            moves.insert(capture_right);
+                        }
+                    }
                     PieceType::Knight => {
                         try_insert(&mut moves, from.up().up().left());
                         try_insert(&mut moves, from.up().up().right());
@@ -367,12 +393,18 @@ impl Game {
             .collect()
     }
 
+    /// All possible moves that do not result in check
     fn moves(&self, color: PieceColor) -> BTreeMap<Position, BTreeSet<Move>> {
         let mut moves = self.potential_moves(color);
         for (&from, moves) in &mut moves {
-            // NOTE: may violate the precondition of self.move that the move is not a promotion.
-            // Left this way, because the specific piece we promote to doesn't affect check and is currently unknown.
-            moves.retain(|&to| !self.r#move(from, to).check(color));
+            moves.retain(|&to| {
+                let after_move = if self.is_promotion(from, to) {
+                    self.promote(from, to, PieceType::Queen)
+                } else {
+                    self.r#move(from, to)
+                };
+                !after_move.check(color)
+            });
         }
         moves
     }
@@ -380,17 +412,31 @@ impl Game {
     /// REQUIRES: there is a piece at `from` and move is not a promotion.
     /// If the move is a promotion, use `promote` instead.
     fn r#move(&self, from: Position, to: Move) -> Self {
-        // debug_assert!(!self.is_promotion(from, to), "{from}->{to}"); -- intentionally violated when checking for check
+        debug_assert!(!self.is_promotion(from, to), "{from} -> {to}");
         let turn = !self.turn;
         let board = self.board.r#move(from, to);
-        Self { turn, board }
+        let just_advanced_two = (board
+            .get(&to)
+            .is_some_and(|piece| piece.piece == PieceType::Pawn)
+            && from.rank.abs_diff(to.rank) == 2)
+            .then(|| to);
+        Self {
+            turn,
+            board,
+            just_advanced_two,
+        }
     }
 
-    /// REQUIRES: there is a piece at `from` and move is a promotion.
+    /// REQUIRES: there is a pawn at `from` and move is a promotion.
     fn promote(&self, from: Position, to: Move, piece_type: PieceType) -> Self {
         let turn = !self.turn;
         let board = self.board.promote(from, to, piece_type);
-        Self { turn, board }
+        let just_advanced_two = None;
+        Self {
+            turn,
+            board,
+            just_advanced_two,
+        }
     }
 
     fn is_promotion(&self, from: Position, to: Move) -> bool {
@@ -407,15 +453,19 @@ impl Game {
         )
     }
 
+    fn attacks(&self, color: PieceColor, position: Position) -> bool {
+        self.potential_moves(color)
+            .values()
+            .any(|moves| moves.contains(&position))
+    }
+
     fn check(&self, color: PieceColor) -> bool {
         let king = Piece {
             piece: PieceType::King,
             color,
         };
         let king_position = self.board.position_of(king).expect("king always exists");
-        self.potential_moves(!color)
-            .values()
-            .any(|moves| moves.contains(&king_position))
+        self.attacks(!color, king_position)
     }
 
     fn mate(&self, color: PieceColor) -> bool {

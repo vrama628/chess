@@ -39,7 +39,7 @@ impl PieceType {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum PieceColor {
     White,
     Black,
@@ -81,7 +81,7 @@ impl Display for PieceColor {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Piece {
     color: PieceColor,
     piece: PieceType,
@@ -201,7 +201,22 @@ impl Board {
         // TODO: use im
         let mut new = self.clone();
         let piece = new.0.remove(&from).expect("Board::r#move precondition");
-        new.0.insert(to, piece);
+        let captured = new.0.insert(to, piece);
+        // en passant
+        if captured.is_none() && piece.piece == PieceType::Pawn && from.file != to.file {
+            let captured_position = Position {
+                rank: from.rank,
+                file: to.file,
+            };
+            let captured = new.0.remove(&captured_position);
+            debug_assert_eq!(
+                captured,
+                Some(Piece {
+                    color: !piece.color,
+                    piece: PieceType::Pawn
+                })
+            );
+        }
         new
     }
 

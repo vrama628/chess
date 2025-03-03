@@ -16,7 +16,7 @@ use std::{
     process::ExitCode,
 };
 
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum PieceType {
     Pawn,
     Knight,
@@ -191,6 +191,19 @@ impl Board {
         new
     }
 
+    fn promote(&self, from: Position, to: Move, piece_type: PieceType) -> Self {
+        // TODO: use im
+        let mut new = self.clone();
+        let Piece { color, piece } = new.0.remove(&from).expect("Board::promote precondition");
+        debug_assert_eq!(piece, PieceType::Pawn);
+        let piece = Piece {
+            color,
+            piece: piece_type,
+        };
+        new.0.insert(to, piece);
+        new
+    }
+
     fn position_of(&self, piece: Piece) -> Option<Position> {
         self.0
             .iter()
@@ -357,16 +370,41 @@ impl Game {
     fn moves(&self, color: PieceColor) -> BTreeMap<Position, BTreeSet<Move>> {
         let mut moves = self.potential_moves(color);
         for (&from, moves) in &mut moves {
+            // NOTE: may violate the precondition of self.move that the move is not a promotion.
+            // Left this way, because the specific piece we promote to doesn't affect check and is currently unknown.
             moves.retain(|&to| !self.r#move(from, to).check(color));
         }
         moves
     }
 
-    /// REQUIRES: there is a piece at `from`
+    /// REQUIRES: there is a piece at `from` and move is not a promotion.
+    /// If the move is a promotion, use `promote` instead.
     fn r#move(&self, from: Position, to: Move) -> Self {
+        // debug_assert!(!self.is_promotion(from, to), "{from}->{to}"); -- intentionally violated when checking for check
         let turn = !self.turn;
         let board = self.board.r#move(from, to);
         Self { turn, board }
+    }
+
+    /// REQUIRES: there is a piece at `from` and move is a promotion.
+    fn promote(&self, from: Position, to: Move, piece_type: PieceType) -> Self {
+        let turn = !self.turn;
+        let board = self.board.promote(from, to, piece_type);
+        Self { turn, board }
+    }
+
+    fn is_promotion(&self, from: Position, to: Move) -> bool {
+        let Some(&Piece {
+            color,
+            piece: PieceType::Pawn,
+        }) = self.board.0.get(&from)
+        else {
+            return false;
+        };
+        matches!(
+            (color, to.rank),
+            (PieceColor::White, 7) | (PieceColor::Black, 0)
+        )
     }
 
     fn check(&self, color: PieceColor) -> bool {
@@ -400,6 +438,11 @@ struct Tui {
     game: Game,
     click_targets: Vec<(Rect, Position)>,
     selected_tile: Option<(Position, BTreeSet<Position>)>,
+    selected_promotion: Option<(
+        Position,
+        Position,
+        BTreeMap<ratatui::layout::Position, PieceType>,
+    )>,
 }
 
 impl Tui {
@@ -407,10 +450,12 @@ impl Tui {
         let game = Game::new();
         let click_targets = Vec::new();
         let selected_tile = None;
+        let selected_promotion = None;
         Self {
             game,
             click_targets,
             selected_tile,
+            selected_promotion,
         }
     }
 
@@ -444,20 +489,33 @@ impl Tui {
                 modifiers: _,
             }) => {
                 let click = ratatui::layout::Position { x: column, y: row };
+                if let Some((from, to, ref click_targets)) = self.selected_promotion {
+                    if let Some(&piece_type) = click_targets.get(&click) {
+                        self.game = self.game.promote(from, to, piece_type);
+                        self.selected_promotion = None;
+                        return false;
+                    }
+                }
                 for &(rect, position) in &self.click_targets {
                     if rect.contains(click) {
                         match self.selected_tile {
                             None => self.select_tile(position),
                             Some((from, ref moves)) => {
                                 if moves.contains(&position) {
-                                    self.game = self.game.r#move(from, position);
+                                    if self.game.is_promotion(from, position) {
+                                        // promotion click targets will be populated upon rendering
+                                        self.selected_promotion =
+                                            Some((from, position, BTreeMap::new()));
+                                    } else {
+                                        self.game = self.game.r#move(from, position);
+                                    }
                                     self.selected_tile = None;
                                 } else {
                                     self.select_tile(position);
                                 }
                             }
                         }
-                        break;
+                        return false;
                     }
                 }
                 false
@@ -467,7 +525,8 @@ impl Tui {
     }
 
     fn select_tile(&mut self, position: Position) {
-        self.selected_tile = self.game.moves(self.game.turn).remove_entry(&position)
+        self.selected_tile = self.game.moves(self.game.turn).remove_entry(&position);
+        self.selected_promotion = None;
     }
 }
 
@@ -476,9 +535,14 @@ impl Widget for &mut Tui {
     where
         Self: Sized,
     {
-        let [area] = Layout::horizontal([8 * 2]).flex(Flex::Center).areas(area);
         let [area] = Layout::vertical([8]).flex(Flex::Center).areas(area);
-        let ranks = Layout::vertical([Constraint::Fill(1); 8]).split(area);
+        let [board_area, info_area] = Layout::horizontal([8 * 2, 5])
+            .spacing(1)
+            .flex(Flex::Center)
+            .areas(area);
+
+        // board
+        let ranks = Layout::vertical([Constraint::Fill(1); 8]).split(board_area);
         self.click_targets.clear();
         for (rank, rect) in ranks.iter().copied().rev().enumerate() {
             let files = Layout::horizontal([Constraint::Fill(1); 8]).split(rect);
@@ -488,14 +552,16 @@ impl Widget for &mut Tui {
                 if let Some(piece) = self.game.board.get(&position) {
                     line.push_span(piece.render())
                 } else {
-                    // hack to work around a bug in ratatui where
-                    // the Line's style doesn't render if the content is empty
                     line.push_span(" ")
                 }
                 if self
                     .selected_tile
                     .as_ref()
                     .is_some_and(|(p, _)| *p == position)
+                    || self
+                        .selected_promotion
+                        .as_ref()
+                        .is_some_and(|(from, to, _)| *from == position || *to == position)
                 {
                     line.push_span(Span::raw("●").fg(Color::LightYellow))
                 }
@@ -508,6 +574,43 @@ impl Widget for &mut Tui {
                 }
                 line.render(rect, buf);
                 self.click_targets.push((rect, position));
+            }
+        }
+
+        // info
+        let [black_turn_area, promotion_area, white_turn_area] = Layout::vertical([2, 1, 2])
+            .flex(Flex::SpaceBetween)
+            .areas(info_area);
+        let turn_area = match self.game.turn {
+            PieceColor::White => white_turn_area,
+            PieceColor::Black => black_turn_area,
+        };
+        let mut text = Text::default();
+        let turn_span = Span::raw(self.game.turn.to_string())
+            .fg(self.game.turn.render())
+            .bg(Color::Gray);
+        text.push_span(turn_span);
+        if self.game.check(self.game.turn) {
+            let check_line = Line::raw("check").bg(Color::LightRed).fg(Color::Gray);
+            text.push_line(check_line);
+        }
+        text.render(turn_area, buf);
+
+        // promotion
+        if let Some((_, _, click_targets)) = &mut self.selected_promotion {
+            click_targets.clear();
+            for (area, piece) in promotion_area.columns().zip([
+                PieceType::Queen,
+                PieceType::Rook,
+                PieceType::Bishop,
+                PieceType::Knight,
+            ]) {
+                piece
+                    .render()
+                    .fg(self.game.turn.render())
+                    .bg(Color::Gray)
+                    .render(area, buf);
+                click_targets.insert(area.as_position(), piece);
             }
         }
     }

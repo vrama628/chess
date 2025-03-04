@@ -12,7 +12,7 @@ use ratatui::{
 use std::{
     collections::{BTreeMap, BTreeSet},
     fmt::Display,
-    ops::Not,
+    ops::{Index, IndexMut, Not},
     process::ExitCode,
 };
 
@@ -39,7 +39,7 @@ impl PieceType {
     }
 }
 
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 enum PieceColor {
     White,
     Black,
@@ -57,6 +57,13 @@ impl PieceColor {
         match self {
             Self::White => 1,
             Self::Black => 6,
+        }
+    }
+
+    fn piece_starting_rank(&self) -> usize {
+        match self {
+            Self::White => 0,
+            Self::Black => 7,
         }
     }
 }
@@ -203,7 +210,7 @@ impl Board {
         let piece = new.0.remove(&from).expect("Board::r#move precondition");
         let captured = new.0.insert(to, piece);
         // en passant
-        if captured.is_none() && piece.piece == PieceType::Pawn && from.file != to.file {
+        if piece.piece == PieceType::Pawn && from.file != to.file && captured.is_none() {
             let captured_position = Position {
                 rank: from.rank,
                 file: to.file,
@@ -216,6 +223,28 @@ impl Board {
                     piece: PieceType::Pawn
                 })
             );
+        }
+        // castling
+        if piece.piece == PieceType::King && from.file.abs_diff(to.file) == 2 {
+            let (rook_from, rook_to) = if to.file < from.file {
+                // queenside
+                (to.left().left(), to.right())
+            } else {
+                // kingside
+                (to.right(), to.left())
+            };
+            let rook = new
+                .0
+                .remove(&rook_from)
+                .expect("Board::r#move castling precondition");
+            debug_assert_eq!(
+                rook,
+                Piece {
+                    color: piece.color,
+                    piece: PieceType::Rook
+                }
+            );
+            new.0.insert(rook_to, rook);
         }
         new
     }
@@ -238,6 +267,107 @@ impl Board {
             .iter()
             .find_map(|(&position, &p)| (p == piece).then_some(position))
     }
+
+    fn is_vacant(&self, position: Position) -> bool {
+        self.get(&position).is_none()
+    }
+}
+
+#[derive(Clone, Copy)]
+enum CastlingInfo {
+    KingHasNotMoved {
+        queenside_rook_has_not_moved: bool,
+        kingside_rook_has_not_moved: bool,
+    },
+    KingHasMoved,
+}
+
+// TODO: make updates return Self instead of mutate once I switch to persistent data structures
+impl CastlingInfo {
+    fn new() -> Self {
+        Self::KingHasNotMoved {
+            queenside_rook_has_not_moved: true,
+            kingside_rook_has_not_moved: true,
+        }
+    }
+
+    fn move_king(&mut self) {
+        *self = Self::KingHasMoved
+    }
+
+    fn move_queenside_rook(&mut self) {
+        if let Self::KingHasNotMoved {
+            queenside_rook_has_not_moved,
+            ..
+        } = self
+        {
+            *queenside_rook_has_not_moved = false;
+        }
+    }
+
+    fn move_kingside_rook(&mut self) {
+        if let Self::KingHasNotMoved {
+            kingside_rook_has_not_moved,
+            ..
+        } = self
+        {
+            *kingside_rook_has_not_moved = false;
+        }
+    }
+
+    fn can_castle_queenside(&self) -> bool {
+        matches!(
+            self,
+            Self::KingHasNotMoved {
+                queenside_rook_has_not_moved: true,
+                ..
+            }
+        )
+    }
+
+    fn can_castle_kingside(&self) -> bool {
+        matches!(
+            self,
+            Self::KingHasNotMoved {
+                kingside_rook_has_not_moved: true,
+                ..
+            }
+        )
+    }
+}
+
+#[derive(Clone, Copy)]
+struct Castling {
+    white: CastlingInfo,
+    black: CastlingInfo,
+}
+
+impl Castling {
+    fn new() -> Self {
+        let white = CastlingInfo::new();
+        let black = CastlingInfo::new();
+        Self { white, black }
+    }
+}
+
+impl Index<PieceColor> for Castling {
+    type Output = CastlingInfo;
+
+    fn index(&self, color: PieceColor) -> &Self::Output {
+        match color {
+            PieceColor::White => &self.white,
+            PieceColor::Black => &self.black,
+        }
+    }
+}
+
+impl IndexMut<PieceColor> for Castling {
+    fn index_mut(&mut self, color: PieceColor) -> &mut Self::Output {
+        match color {
+            PieceColor::White => &mut self.white,
+            PieceColor::Black => &mut self.black,
+        }
+    }
 }
 
 struct Game {
@@ -245,6 +375,8 @@ struct Game {
     board: Board,
     /// for en passant
     just_advanced_two: Option<Position>,
+    /// for castling
+    castling: Castling,
 }
 
 // TODO: en passant, castling, promotion
@@ -269,15 +401,18 @@ impl Game {
         let turn = PieceColor::White;
         let board = Board::new();
         let just_advanced_two = None;
+        let castling = Castling::new();
         Self {
             turn,
             board,
             just_advanced_two,
+            castling,
         }
     }
 
     /// TODO: castling
     /// returns moves that can be made, but without filtering out moves into check
+    /// ENSURES: there is a piece at all keys of the returned map
     fn potential_moves(&self, color: PieceColor) -> BTreeMap<Position, BTreeSet<Move>> {
         self.board
             .0
@@ -309,14 +444,14 @@ impl Game {
                 match piece {
                     PieceType::Pawn => {
                         let forward = from.pawn(color);
-                        if self.board.get(&forward).is_none() {
+                        if self.board.is_vacant(forward) {
                             moves.insert(forward);
                         }
 
                         let forward_two = forward.pawn(color);
                         if from.rank == color.pawn_starting_rank()
-                            && self.board.get(&forward).is_none()
-                            && self.board.get(&forward_two).is_none()
+                            && self.board.is_vacant(forward)
+                            && self.board.is_vacant(forward_two)
                         {
                             moves.insert(forward_two);
                         }
@@ -392,7 +527,6 @@ impl Game {
                         saturate(&mut moves, &|p| p.down().right());
                     }
                     PieceType::King => {
-                        // TODO: castling
                         try_insert(&mut moves, from.up());
                         try_insert(&mut moves, from.up().right());
                         try_insert(&mut moves, from.right());
@@ -401,6 +535,7 @@ impl Game {
                         try_insert(&mut moves, from.down().left());
                         try_insert(&mut moves, from.left());
                         try_insert(&mut moves, from.up().left());
+                        // castling handled in Game::moves
                     }
                 }
                 (from, moves)
@@ -420,6 +555,40 @@ impl Game {
                 };
                 !after_move.check(color)
             });
+
+            // handle castling here instead of in potential_moves because it requires checking for check,
+            // which would infinitely recurse if done in potential_moves, and because castling cannot capture
+            // so doesn't need to be included in potential_moves anyway
+            if self
+                .board
+                .get(&from)
+                .expect("Game::potential_moves postcondition")
+                .piece
+                == PieceType::King
+            {
+                // queenside castling
+                if self.castling[color].can_castle_queenside()
+                    && self.board.is_vacant(from.left())
+                    && self.board.is_vacant(from.left().left())
+                    && self.board.is_vacant(from.left().left().left())
+                    && !self.attacks(!color, from)
+                    && !self.attacks(!color, from.left())
+                    && !self.attacks(!color, from.left().left())
+                {
+                    moves.insert(from.left().left());
+                }
+
+                // kingside castling
+                if self.castling[color].can_castle_kingside()
+                    && self.board.is_vacant(from.right())
+                    && self.board.is_vacant(from.right().right())
+                    && !self.attacks(!color, from)
+                    && !self.attacks(!color, from.right())
+                    && !self.attacks(!color, from.right().right())
+                {
+                    moves.insert(from.right().right());
+                }
+            }
         }
         moves
     }
@@ -428,17 +597,31 @@ impl Game {
     /// If the move is a promotion, use `promote` instead.
     fn r#move(&self, from: Position, to: Move) -> Self {
         debug_assert!(!self.is_promotion(from, to), "{from} -> {to}");
+        let piece = self.board.get(&from).expect("Game::move precondition");
         let turn = !self.turn;
         let board = self.board.r#move(from, to);
-        let just_advanced_two = (board
-            .get(&to)
-            .is_some_and(|piece| piece.piece == PieceType::Pawn)
-            && from.rank.abs_diff(to.rank) == 2)
-            .then(|| to);
+        let just_advanced_two =
+            (piece.piece == PieceType::Pawn && from.rank.abs_diff(to.rank) == 2).then(|| to);
+        let mut castling_info = self.castling.clone();
+        if from.rank == piece.color.piece_starting_rank() {
+            match (piece.piece, from.file) {
+                (PieceType::King, 4) => {
+                    castling_info[piece.color].move_king();
+                }
+                (PieceType::Rook, 0) => {
+                    castling_info[piece.color].move_queenside_rook();
+                }
+                (PieceType::Rook, 7) => {
+                    castling_info[piece.color].move_kingside_rook();
+                }
+                _ => {}
+            }
+        }
         Self {
             turn,
             board,
             just_advanced_two,
+            castling: castling_info,
         }
     }
 
@@ -447,10 +630,12 @@ impl Game {
         let turn = !self.turn;
         let board = self.board.promote(from, to, piece_type);
         let just_advanced_two = None;
+        let castling_info = self.castling.clone();
         Self {
             turn,
             board,
             just_advanced_two,
+            castling: castling_info,
         }
     }
 
@@ -491,8 +676,10 @@ impl Game {
     fn status(&self) -> Option<Outcome> {
         self.mate(self.turn).then(|| {
             if self.check(self.turn) {
+                // mate is check
                 Outcome::Win(!self.turn)
             } else {
+                // mate is stale
                 Outcome::Draw
             }
         })

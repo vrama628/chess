@@ -3,6 +3,13 @@ name = "chess"
 version = "0.1.0"
 edition = "2021"
 
+[[bench]]
+name = "benchmark"
+harness = false
+
 [dependencies]
 clap = { version = "4.5.31", features = ["derive"] }
 ratatui = { version = "0.29.0", features = ["unstable-backend-writer"] }
+
+[dev-dependencies]
+criterion = "0.5.1"

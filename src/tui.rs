@@ -133,7 +133,10 @@ impl Tui {
     }
 
     fn select_tile(&mut self, position: Position) {
-        self.selected_tile = self.game.moves(self.game.turn()).remove_entry(&position);
+        self.selected_tile = self
+            .game
+            .moves(self.game.turn())
+            .find(|(p, _)| *p == position);
         self.selected_promotion = None;
     }
 }

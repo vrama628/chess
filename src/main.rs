@@ -1,15 +1,12 @@
 use std::process::ExitCode;
 
-mod ai;
-mod game;
-mod tui;
-
 use clap::Parser;
 use ratatui::crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     ExecutableCommand,
 };
-use tui::Tui;
+
+use chess::tui::Tui;
 
 #[derive(Parser)]
 struct Args {

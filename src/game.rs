@@ -69,7 +69,10 @@ impl Game {
     /// TODO: castling
     /// returns moves that can be made, but without filtering out moves into check
     /// ENSURES: there is a piece at all keys of the returned map
-    fn potential_moves(&self, color: PieceColor) -> BTreeMap<Position, BTreeSet<Position>> {
+    fn potential_moves(
+        &self,
+        color: PieceColor,
+    ) -> impl Iterator<Item = (Position, BTreeSet<Position>)> + '_ {
         self.board
             .iter(color)
             .map(|(&from, &Piece { color, piece })| {
@@ -194,13 +197,14 @@ impl Game {
                 }
                 (from, moves)
             })
-            .collect()
     }
 
     /// All possible moves that do not result in check
-    pub fn moves(&self, color: PieceColor) -> BTreeMap<Position, BTreeSet<Position>> {
-        let mut moves = self.potential_moves(color);
-        for (&from, moves) in &mut moves {
+    pub fn moves(
+        &self,
+        color: PieceColor,
+    ) -> impl Iterator<Item = (Position, BTreeSet<Position>)> + '_ {
+        self.potential_moves(color).map(move |(from, mut moves)| {
             moves.retain(|&to| {
                 let after_move = if self.is_promotion(from, to) {
                     self.promote(from, to, PieceType::Queen)
@@ -243,8 +247,9 @@ impl Game {
                     moves.insert(from.right().right());
                 }
             }
-        }
-        moves
+
+            (from, moves)
+        })
     }
 
     /// REQUIRES: there is a piece at `from` and move is not a promotion.
@@ -311,8 +316,7 @@ impl Game {
 
     pub fn attacks(&self, color: PieceColor, position: Position) -> bool {
         self.potential_moves(color)
-            .values()
-            .any(|moves| moves.contains(&position))
+            .any(|(_, moves)| moves.contains(&position))
     }
 
     pub fn check(&self, color: PieceColor) -> bool {
@@ -325,7 +329,7 @@ impl Game {
     }
 
     fn mate(&self, color: PieceColor) -> bool {
-        self.moves(color).values().all(|moves| moves.is_empty())
+        self.moves(color).all(|(_, moves)| moves.is_empty())
     }
 
     /// returns None if the game is still in progress

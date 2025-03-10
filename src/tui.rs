@@ -22,6 +22,7 @@ pub struct Tui {
         Position,
         BTreeMap<ratatui::layout::Position, PieceType>,
     )>,
+    last_move: Option<(Position, Position)>,
 }
 
 impl Tui {
@@ -30,11 +31,13 @@ impl Tui {
         let click_targets = Vec::new();
         let selected_tile = None;
         let selected_promotion = None;
+        let last_move = None;
         Self {
             game,
             click_targets,
             selected_tile,
             selected_promotion,
+            last_move,
         }
     }
 
@@ -43,10 +46,11 @@ impl Tui {
         terminal: &mut Terminal<B>,
     ) -> std::io::Result<Option<Outcome>> {
         let outcome = loop {
+            terminal.draw(|frame| frame.render_widget(&mut *self, frame.area()))?;
             if let Some(outcome) = self.game.status() {
+                while !matches!(event::read()?, Event::Key(_)) {}
                 break Some(outcome);
             }
-            terminal.draw(|frame| frame.render_widget(&mut *self, frame.area()))?;
             let event = event::read()?;
             if self.handle(event) {
                 break None;
@@ -74,6 +78,7 @@ impl Tui {
                 if let Some((from, to, ref click_targets)) = self.selected_promotion {
                     if let Some(&piece_type) = click_targets.get(&click) {
                         self.game = self.game.promote(from, to, piece_type);
+                        self.last_move = Some((from, to));
                         self.selected_promotion = None;
                         return false;
                     }
@@ -90,6 +95,7 @@ impl Tui {
                                             Some((from, position, BTreeMap::new()));
                                     } else {
                                         self.game = self.game.r#move(from, position);
+                                        self.last_move = Some((from, position));
                                     }
                                     self.selected_tile = None;
                                 } else {
@@ -112,6 +118,15 @@ impl Tui {
     }
 }
 
+fn highlight_last_move<'a>(line: Line<'a>) -> Line<'a> {
+    let bg = match line.style.bg {
+        Some(Color::DarkGray) => Color::Yellow,
+        Some(Color::Gray) => Color::LightYellow,
+        color => panic!("unexpected background color {color:?}"),
+    };
+    line.bg(bg)
+}
+
 impl Widget for &mut Tui {
     fn render(self, area: Rect, buf: &mut Buffer)
     where
@@ -131,6 +146,12 @@ impl Widget for &mut Tui {
             for (file, rect) in files.iter().copied().enumerate() {
                 let position = Position { rank, file };
                 let mut line = position.square();
+                if self
+                    .last_move
+                    .is_some_and(|(from, to)| position == from || position == to)
+                {
+                    line = highlight_last_move(line);
+                }
                 if let Some(piece) = self.game.get(position) {
                     line.push_span(piece.render())
                 } else {

@@ -248,17 +248,17 @@ impl Game {
         let board = self.board.r#move(from, to);
         let just_advanced_two =
             (piece.piece == PieceType::Pawn && from.rank.abs_diff(to.rank) == 2).then(|| to);
-        let mut castling_info = self.castling.clone();
+        let mut castling = self.castling;
         if from.rank == piece.color.piece_starting_rank() {
             match (piece.piece, from.file) {
                 (PieceType::King, 4) => {
-                    castling_info[piece.color].move_king();
+                    castling[piece.color].move_king();
                 }
                 (PieceType::Rook, 0) => {
-                    castling_info[piece.color].move_queenside_rook();
+                    castling[piece.color].move_queenside_rook();
                 }
                 (PieceType::Rook, 7) => {
-                    castling_info[piece.color].move_kingside_rook();
+                    castling[piece.color].move_kingside_rook();
                 }
                 _ => {}
             }
@@ -267,7 +267,7 @@ impl Game {
             turn,
             board,
             just_advanced_two,
-            castling: castling_info,
+            castling,
         }
     }
 

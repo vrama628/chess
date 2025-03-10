@@ -1,16 +1,24 @@
 use std::process::ExitCode;
 
+mod ai;
 mod game;
 mod tui;
 
+use clap::Parser;
 use ratatui::crossterm::{
     event::{DisableMouseCapture, EnableMouseCapture},
     ExecutableCommand,
 };
 use tui::Tui;
 
+#[derive(Parser)]
+struct Args {
+    ai: Option<usize>,
+}
+
 fn main() -> ExitCode {
-    let mut tui = Tui::new();
+    let Args { ai } = Args::parse();
+    let mut tui = Tui::new(ai);
     let mut terminal = ratatui::init();
     terminal
         .backend_mut()

@@ -22,6 +22,7 @@ pub struct Game {
     castling: Castling,
 }
 
+#[derive(PartialEq, Eq)]
 pub enum Outcome {
     Win(PieceColor),
     Draw,
@@ -35,6 +36,13 @@ impl Display for Outcome {
         }
     }
 }
+
+pub const PROMOTIONS: [PieceType; 4] = [
+    PieceType::Queen,
+    PieceType::Rook,
+    PieceType::Bishop,
+    PieceType::Knight,
+];
 
 impl Game {
     pub fn new() -> Self {
@@ -73,9 +81,8 @@ impl Game {
                 };
                 let saturate = |moves: &mut BTreeSet<Position>,
                                 f: &dyn Fn(Position) -> Position| {
-                    let mut to = from;
+                    let mut to = f(from);
                     while to.is_valid() {
-                        to = f(to);
                         if let Some(other) = self.board.get(to) {
                             if other.color != color {
                                 moves.insert(to);
@@ -84,6 +91,7 @@ impl Game {
                         } else {
                             moves.insert(to);
                         }
+                        to = f(to);
                     }
                 };
                 let mut moves = BTreeSet::new();
@@ -273,6 +281,8 @@ impl Game {
 
     /// REQUIRES: there is a pawn at `from` and move is a promotion.
     pub fn promote(&self, from: Position, to: Position, piece_type: PieceType) -> Self {
+        debug_assert!(self.is_promotion(from, to), "{from} -> {to}");
+        debug_assert!(PROMOTIONS.contains(&piece_type), "{piece_type:?}");
         let turn = !self.turn;
         let board = self.board.promote(from, to, piece_type);
         let just_advanced_two = None;
@@ -329,5 +339,9 @@ impl Game {
                 Outcome::Draw
             }
         })
+    }
+
+    pub fn iter(&self, color: PieceColor) -> impl Iterator<Item = (&Position, &Piece)> {
+        self.board.iter(color)
     }
 }

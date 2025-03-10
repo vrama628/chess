@@ -7,10 +7,13 @@ use ratatui::{
 };
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::game::{
-    piece::{PieceColor, PieceType},
-    position::Position,
-    Game, Outcome,
+use crate::{
+    ai::{self, Move},
+    game::{
+        piece::{PieceColor, PieceType},
+        position::Position,
+        Game, Outcome, PROMOTIONS,
+    },
 };
 
 pub struct Tui {
@@ -23,10 +26,11 @@ pub struct Tui {
         BTreeMap<ratatui::layout::Position, PieceType>,
     )>,
     last_move: Option<(Position, Position)>,
+    ai: Option<usize>,
 }
 
 impl Tui {
-    pub fn new() -> Self {
+    pub fn new(ai: Option<usize>) -> Self {
         let game = Game::new();
         let click_targets = Vec::new();
         let selected_tile = None;
@@ -38,6 +42,7 @@ impl Tui {
             selected_tile,
             selected_promotion,
             last_move,
+            ai,
         }
     }
 
@@ -51,9 +56,16 @@ impl Tui {
                 while !matches!(event::read()?, Event::Key(_)) {}
                 break Some(outcome);
             }
-            let event = event::read()?;
-            if self.handle(event) {
-                break None;
+            if let (Some(ai), PieceColor::Black) = (self.ai, self.game.turn()) {
+                match ai::choose(&self.game, ai) {
+                    Move::Move(from, to) => self.r#move(from, to),
+                    Move::Promote(from, to, piece_type) => self.promote(from, to, piece_type),
+                }
+            } else {
+                let event = event::read()?;
+                if self.handle(event) {
+                    break None;
+                }
             }
         };
         return Ok(outcome);
@@ -77,8 +89,7 @@ impl Tui {
                 let click = ratatui::layout::Position { x: column, y: row };
                 if let Some((from, to, ref click_targets)) = self.selected_promotion {
                     if let Some(&piece_type) = click_targets.get(&click) {
-                        self.game = self.game.promote(from, to, piece_type);
-                        self.last_move = Some((from, to));
+                        self.promote(from, to, piece_type);
                         self.selected_promotion = None;
                         return false;
                     }
@@ -94,8 +105,7 @@ impl Tui {
                                         self.selected_promotion =
                                             Some((from, position, BTreeMap::new()));
                                     } else {
-                                        self.game = self.game.r#move(from, position);
-                                        self.last_move = Some((from, position));
+                                        self.r#move(from, position);
                                     }
                                     self.selected_tile = None;
                                 } else {
@@ -110,6 +120,16 @@ impl Tui {
             }
             _ => false,
         }
+    }
+
+    fn r#move(&mut self, from: Position, to: Position) {
+        self.game = self.game.r#move(from, to);
+        self.last_move = Some((from, to));
+    }
+
+    fn promote(&mut self, from: Position, to: Position, piece_type: PieceType) {
+        self.game = self.game.promote(from, to, piece_type);
+        self.last_move = Some((from, to));
     }
 
     fn select_tile(&mut self, position: Position) {
@@ -203,12 +223,7 @@ impl Widget for &mut Tui {
         // promotion
         if let Some((_, _, click_targets)) = &mut self.selected_promotion {
             click_targets.clear();
-            for (area, piece) in promotion_area.columns().zip([
-                PieceType::Queen,
-                PieceType::Rook,
-                PieceType::Bishop,
-                PieceType::Knight,
-            ]) {
+            for (area, piece) in promotion_area.columns().zip(PROMOTIONS) {
                 piece
                     .render()
                     .fg(turn.render())

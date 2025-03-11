@@ -19,7 +19,7 @@ pub struct Game {
     castling: Castling,
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone, Copy)]
 pub enum Outcome {
     Win(PieceColor),
     Draw,

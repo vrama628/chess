@@ -11,10 +11,15 @@ pub enum Move {
     Promote(Position, Position, PieceType),
 }
 
-#[derive(PartialEq, Eq)]
+#[derive(PartialEq, Eq, Clone, Copy)]
 enum Evaluation {
     Outcome(Outcome),
     Estimate(i8),
+}
+
+impl Evaluation {
+    const MIN: Self = Evaluation::Outcome(Outcome::Win(PieceColor::Black));
+    const MAX: Self = Evaluation::Outcome(Outcome::Win(PieceColor::White));
 }
 
 impl Ord for Evaluation {
@@ -65,12 +70,16 @@ fn estimate(game: Game) -> i8 {
 }
 
 /// REQUIRES: game is not in mate
-fn minimax(game: &Game, depth: usize) -> (Move, Evaluation) {
+/// alpha = the highest value white can force
+/// beta = the lowest value black can force
+fn minimax(
+    game: &Game,
+    depth: usize,
+    mut alpha: Evaluation,
+    mut beta: Evaluation,
+) -> (Move, Evaluation) {
     let mut best: Option<(Move, Evaluation)> = None;
-    let better = match game.turn() {
-        PieceColor::White => Ordering::Greater,
-        PieceColor::Black => Ordering::Less,
-    };
+    let turn = game.turn();
     for r#move in game
         .moves(game.turn())
         .into_iter()
@@ -95,13 +104,38 @@ fn minimax(game: &Game, depth: usize) -> (Move, Evaluation) {
         } else if depth == 0 {
             Evaluation::Estimate(estimate(game))
         } else {
-            minimax(&game, depth - 1).1
+            minimax(&game, depth - 1, alpha, beta).1
         };
-        if best
-            .as_ref()
-            .is_none_or(|(_, best_so_far)| evaluation.cmp(best_so_far) == better)
-        {
-            best = Some((r#move, evaluation))
+        match turn {
+            PieceColor::White => {
+                // maximize
+                if best
+                    .as_ref()
+                    .is_none_or(|&(_, best_so_far)| evaluation > best_so_far)
+                {
+                    best = Some((r#move, evaluation))
+                }
+                if evaluation > beta {
+                    break;
+                }
+                if evaluation > alpha {
+                    alpha = evaluation;
+                }
+            }
+            PieceColor::Black => {
+                if best
+                    .as_ref()
+                    .is_none_or(|&(_, best_so_far)| evaluation < best_so_far)
+                {
+                    best = Some((r#move, evaluation))
+                }
+                if evaluation < alpha {
+                    break;
+                }
+                if evaluation < beta {
+                    beta = evaluation;
+                }
+            }
         }
     }
     best.expect("minimax precondition")
@@ -109,5 +143,5 @@ fn minimax(game: &Game, depth: usize) -> (Move, Evaluation) {
 
 /// REQUIRES: game is not in mate
 pub fn choose(game: &Game, depth: usize) -> Move {
-    minimax(game, depth).0
+    minimax(game, depth, Evaluation::MIN, Evaluation::MAX).0
 }

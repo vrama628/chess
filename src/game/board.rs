@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use rustc_hash::FxHashMap;
 
 use crate::game::{
     piece::{Piece, PieceColor, PieceType},
@@ -6,7 +6,7 @@ use crate::game::{
 };
 
 #[derive(Clone)]
-pub struct Board(BTreeMap<Position, Piece>);
+pub struct Board(FxHashMap<Position, Piece>);
 
 impl Board {
     pub fn new() -> Self {

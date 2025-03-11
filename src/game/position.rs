@@ -4,7 +4,7 @@ use ratatui::prelude::*;
 
 use crate::game::piece::PieceColor;
 
-#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy)]
+#[derive(PartialEq, Eq, PartialOrd, Ord, Clone, Copy, Hash)]
 pub struct Position {
     pub rank: usize,
     pub file: usize,

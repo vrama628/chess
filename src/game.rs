@@ -1,4 +1,4 @@
-use std::{collections::BTreeSet, fmt::Display};
+use std::fmt::Display;
 
 mod board;
 mod castling;
@@ -69,37 +69,36 @@ impl Game {
     fn potential_moves(
         &self,
         color: PieceColor,
-    ) -> impl Iterator<Item = (Position, BTreeSet<Position>)> + '_ {
+    ) -> impl Iterator<Item = (Position, Vec<Position>)> + '_ {
         self.board
             .iter(color)
             .map(|(&from, &Piece { color, piece })| {
-                let try_insert = |moves: &mut BTreeSet<Position>, to: Position| {
+                let try_insert = |moves: &mut Vec<Position>, to: Position| {
                     if to.is_valid() && self.board.get(to).is_none_or(|other| other.color != color)
                     {
-                        moves.insert(to);
+                        moves.push(to);
                     }
                 };
-                let saturate = |moves: &mut BTreeSet<Position>,
-                                f: &dyn Fn(Position) -> Position| {
+                let saturate = |moves: &mut Vec<Position>, f: &dyn Fn(Position) -> Position| {
                     let mut to = f(from);
                     while to.is_valid() {
                         if let Some(other) = self.board.get(to) {
                             if other.color != color {
-                                moves.insert(to);
+                                moves.push(to);
                             }
                             break;
                         } else {
-                            moves.insert(to);
+                            moves.push(to);
                         }
                         to = f(to);
                     }
                 };
-                let mut moves = BTreeSet::new();
+                let mut moves = vec![];
                 match piece {
                     PieceType::Pawn => {
                         let forward = from.pawn(color);
                         if self.board.is_vacant(forward) {
-                            moves.insert(forward);
+                            moves.push(forward);
                         }
 
                         let forward_two = forward.pawn(color);
@@ -107,7 +106,7 @@ impl Game {
                             && self.board.is_vacant(forward)
                             && self.board.is_vacant(forward_two)
                         {
-                            moves.insert(forward_two);
+                            moves.push(forward_two);
                         }
 
                         let capture_left = forward.left();
@@ -126,7 +125,7 @@ impl Game {
                                         == !color
                             })
                         {
-                            moves.insert(capture_left);
+                            moves.push(capture_left);
                         }
 
                         let capture_right = forward.right();
@@ -145,7 +144,7 @@ impl Game {
                                         == !color
                             })
                         {
-                            moves.insert(capture_right);
+                            moves.push(capture_right);
                         }
                     }
                     PieceType::Knight => {
@@ -197,10 +196,7 @@ impl Game {
     }
 
     /// All possible moves that do not result in check
-    pub fn moves(
-        &self,
-        color: PieceColor,
-    ) -> impl Iterator<Item = (Position, BTreeSet<Position>)> + '_ {
+    pub fn moves(&self, color: PieceColor) -> impl Iterator<Item = (Position, Vec<Position>)> + '_ {
         self.potential_moves(color).map(move |(from, mut moves)| {
             moves.retain(|&to| {
                 let after_move = if self.is_promotion(from, to) {
@@ -230,7 +226,7 @@ impl Game {
                     && !self.attacks(!color, from.left())
                     && !self.attacks(!color, from.left().left())
                 {
-                    moves.insert(from.left().left());
+                    moves.push(from.left().left());
                 }
 
                 // kingside castling
@@ -241,7 +237,7 @@ impl Game {
                     && !self.attacks(!color, from.right())
                     && !self.attacks(!color, from.right().right())
                 {
-                    moves.insert(from.right().right());
+                    moves.push(from.right().right());
                 }
             }
 

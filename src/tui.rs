@@ -5,7 +5,7 @@ use ratatui::{
     layout::Flex,
     prelude::*,
 };
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use crate::{
     ai::{self, Move},
@@ -19,7 +19,7 @@ use crate::{
 pub struct Tui {
     game: Game,
     click_targets: Vec<(Rect, Position)>,
-    selected_tile: Option<(Position, BTreeSet<Position>)>,
+    selected_tile: Option<(Position, Vec<Position>)>,
     selected_promotion: Option<(
         Position,
         Position,

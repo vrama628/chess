@@ -195,6 +195,64 @@ impl Game {
             })
     }
 
+    fn bishop_attacks(&self, position: Position, target: Position) -> bool {
+        position.rank.abs_diff(target.rank) == position.file.abs_diff(target.file)
+            && (position.rank.min(target.rank)..position.rank.max(target.rank))
+                .zip(position.file.min(target.file)..position.file.max(target.file))
+                .skip(1)
+                .all(|(rank, file)| self.get(Position { rank, file }).is_none())
+    }
+
+    fn rook_attacks(&self, position: Position, target: Position) -> bool {
+        (position.rank == target.rank
+            && (position.file.min(target.file)..position.file.max(target.file))
+                .skip(1)
+                .all(|file| {
+                    self.get(Position {
+                        rank: position.rank,
+                        file,
+                    })
+                    .is_none()
+                }))
+            || (position.file == target.file
+                && (position.rank.min(target.rank)..position.rank.max(target.rank))
+                    .skip(1)
+                    .all(|rank| {
+                        self.get(Position {
+                            rank,
+                            file: position.file,
+                        })
+                        .is_none()
+                    }))
+    }
+
+    fn attacks(&self, color: PieceColor, target: Position) -> bool {
+        self.board
+            .iter(color)
+            .any(|(&position, piece)| match piece.piece {
+                PieceType::Pawn => {
+                    let pawn_move = position.pawn(color);
+                    pawn_move.rank == target.rank && pawn_move.file.abs_diff(target.file) == 1
+                }
+                PieceType::Knight => matches!(
+                    (
+                        position.rank.abs_diff(target.rank),
+                        position.file.abs_diff(target.file),
+                    ),
+                    (1, 2) | (2, 1)
+                ),
+                PieceType::Bishop => self.bishop_attacks(position, target),
+                PieceType::Rook => self.rook_attacks(position, target),
+                PieceType::Queen => {
+                    self.bishop_attacks(position, target) || self.rook_attacks(position, target)
+                }
+                PieceType::King => {
+                    position.rank.abs_diff(target.rank) <= 1
+                        && position.file.abs_diff(target.file) <= 1
+                }
+            })
+    }
+
     /// All possible moves that do not result in check
     pub fn moves(&self, color: PieceColor) -> impl Iterator<Item = (Position, Vec<Position>)> + '_ {
         self.potential_moves(color).map(move |(from, mut moves)| {
@@ -305,11 +363,6 @@ impl Game {
             (color, to.rank),
             (PieceColor::White, 7) | (PieceColor::Black, 0)
         )
-    }
-
-    pub fn attacks(&self, color: PieceColor, position: Position) -> bool {
-        self.potential_moves(color)
-            .any(|(_, moves)| moves.contains(&position))
     }
 
     pub fn check(&self, color: PieceColor) -> bool {

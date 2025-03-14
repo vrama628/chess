@@ -63,41 +63,46 @@ impl Game {
         self.board.get(position)
     }
 
-    /// TODO: castling
     /// returns moves that can be made, but without filtering out moves into check
     /// ENSURES: there is a piece at all keys of the returned map
-    fn potential_moves(
-        &self,
-        color: PieceColor,
-    ) -> impl Iterator<Item = (Position, Vec<Position>)> + '_ {
+    pub fn moves(&self, color: PieceColor) -> impl Iterator<Item = (Position, Vec<Position>)> + '_ {
+        let king_position = {
+            let king = Piece {
+                piece: PieceType::King,
+                color,
+            };
+            self.board.position_of(king).expect("king always exists")
+        };
         self.board
             .iter(color)
-            .map(|(&from, &Piece { color, piece })| {
-                let try_insert = |moves: &mut Vec<Position>, to: Position| {
-                    if to.is_valid() && self.board.get(to).is_none_or(|other| other.color != color)
-                    {
-                        moves.push(to);
-                    }
+            .map(move |(&from, &Piece { color, piece })| {
+                let does_not_cause_check = |to: Position| {
+                    let after_move = if cfg!(debug_assertions) && self.is_promotion(from, to) {
+                        self.promote(from, to, PieceType::Queen)
+                    } else {
+                        self.r#move(from, to)
+                    };
+                    !after_move.attacks(!color, king_position)
                 };
-                let saturate = |moves: &mut Vec<Position>, f: &dyn Fn(Position) -> Position| {
+                let mut moves = vec![];
+                let mut saturate = |f: &dyn Fn(Position) -> Position| {
                     let mut to = f(from);
                     while to.is_valid() {
                         if let Some(other) = self.board.get(to) {
-                            if other.color != color {
+                            if other.color != color && does_not_cause_check(to) {
                                 moves.push(to);
                             }
                             break;
-                        } else {
+                        } else if does_not_cause_check(to) {
                             moves.push(to);
                         }
                         to = f(to);
                     }
                 };
-                let mut moves = vec![];
                 match piece {
                     PieceType::Pawn => {
                         let forward = from.pawn(color);
-                        if self.board.is_vacant(forward) {
+                        if self.board.is_vacant(forward) && does_not_cause_check(forward) {
                             moves.push(forward);
                         }
 
@@ -105,12 +110,13 @@ impl Game {
                         if from.rank == color.pawn_starting_rank()
                             && self.board.is_vacant(forward)
                             && self.board.is_vacant(forward_two)
+                            && does_not_cause_check(forward_two)
                         {
                             moves.push(forward_two);
                         }
 
                         let capture_left = forward.left();
-                        if self
+                        if (self
                             .board
                             .get(capture_left)
                             .is_some_and(|other| other.color == !color)
@@ -123,13 +129,14 @@ impl Game {
                                         .expect("Game::just_advanced_two invariant")
                                         .color
                                         == !color
-                            })
+                            }))
+                            && does_not_cause_check(capture_left)
                         {
                             moves.push(capture_left);
                         }
 
                         let capture_right = forward.right();
-                        if self
+                        if (self
                             .board
                             .get(capture_right)
                             .is_some_and(|other| other.color == !color)
@@ -142,53 +149,94 @@ impl Game {
                                         .expect("Game::just_advanced_two invariant")
                                         .color
                                         == !color
-                            })
+                            }))
+                            && does_not_cause_check(capture_right)
                         {
                             moves.push(capture_right);
                         }
                     }
                     PieceType::Knight => {
-                        try_insert(&mut moves, from.up().up().left());
-                        try_insert(&mut moves, from.up().up().right());
-                        try_insert(&mut moves, from.left().left().up());
-                        try_insert(&mut moves, from.left().left().down());
-                        try_insert(&mut moves, from.down().down().left());
-                        try_insert(&mut moves, from.down().down().right());
-                        try_insert(&mut moves, from.right().right().up());
-                        try_insert(&mut moves, from.right().right().down());
+                        let mut try_insert = |to: Position| {
+                            if to.is_valid()
+                                && self.board.get(to).is_none_or(|other| other.color != color)
+                                && does_not_cause_check(to)
+                            {
+                                moves.push(to);
+                            }
+                        };
+                        try_insert(from.up().up().left());
+                        try_insert(from.up().up().right());
+                        try_insert(from.left().left().up());
+                        try_insert(from.left().left().down());
+                        try_insert(from.down().down().left());
+                        try_insert(from.down().down().right());
+                        try_insert(from.right().right().up());
+                        try_insert(from.right().right().down());
                     }
                     PieceType::Bishop => {
-                        saturate(&mut moves, &|p| p.up().left());
-                        saturate(&mut moves, &|p| p.up().right());
-                        saturate(&mut moves, &|p| p.down().left());
-                        saturate(&mut moves, &|p| p.down().right());
+                        saturate(&|p| p.up().left());
+                        saturate(&|p| p.up().right());
+                        saturate(&|p| p.down().left());
+                        saturate(&|p| p.down().right());
                     }
                     PieceType::Rook => {
-                        saturate(&mut moves, &|p| p.up());
-                        saturate(&mut moves, &|p| p.left());
-                        saturate(&mut moves, &|p| p.down());
-                        saturate(&mut moves, &|p| p.right());
+                        saturate(&|p| p.up());
+                        saturate(&|p| p.left());
+                        saturate(&|p| p.down());
+                        saturate(&|p| p.right());
                     }
                     PieceType::Queen => {
-                        saturate(&mut moves, &|p| p.up());
-                        saturate(&mut moves, &|p| p.left());
-                        saturate(&mut moves, &|p| p.down());
-                        saturate(&mut moves, &|p| p.right());
-                        saturate(&mut moves, &|p| p.up().left());
-                        saturate(&mut moves, &|p| p.up().right());
-                        saturate(&mut moves, &|p| p.down().left());
-                        saturate(&mut moves, &|p| p.down().right());
+                        saturate(&|p| p.up());
+                        saturate(&|p| p.left());
+                        saturate(&|p| p.down());
+                        saturate(&|p| p.right());
+                        saturate(&|p| p.up().left());
+                        saturate(&|p| p.up().right());
+                        saturate(&|p| p.down().left());
+                        saturate(&|p| p.down().right());
                     }
                     PieceType::King => {
-                        try_insert(&mut moves, from.up());
-                        try_insert(&mut moves, from.up().right());
-                        try_insert(&mut moves, from.right());
-                        try_insert(&mut moves, from.down().right());
-                        try_insert(&mut moves, from.down());
-                        try_insert(&mut moves, from.down().left());
-                        try_insert(&mut moves, from.left());
-                        try_insert(&mut moves, from.up().left());
-                        // castling handled in Game::moves
+                        let does_not_cause_check =
+                            |to: Position| !self.r#move(from, to).attacks(!color, to);
+                        let mut try_insert = |to: Position| {
+                            if to.is_valid()
+                                && self.board.get(to).is_none_or(|other| other.color != color)
+                                && does_not_cause_check(to)
+                            {
+                                moves.push(to);
+                            }
+                        };
+                        try_insert(from.up());
+                        try_insert(from.up().right());
+                        try_insert(from.right());
+                        try_insert(from.down().right());
+                        try_insert(from.down());
+                        try_insert(from.down().left());
+                        try_insert(from.left());
+                        try_insert(from.up().left());
+
+                        // queenside castling
+                        if self.castling[color].can_castle_queenside()
+                            && self.board.is_vacant(from.left())
+                            && self.board.is_vacant(from.left().left())
+                            && self.board.is_vacant(from.left().left().left())
+                            && !self.attacks(!color, from)
+                            && !self.attacks(!color, from.left())
+                            && !self.attacks(!color, from.left().left())
+                        {
+                            moves.push(from.left().left());
+                        }
+
+                        // kingside castling
+                        if self.castling[color].can_castle_kingside()
+                            && self.board.is_vacant(from.right())
+                            && self.board.is_vacant(from.right().right())
+                            && !self.attacks(!color, from)
+                            && !self.attacks(!color, from.right())
+                            && !self.attacks(!color, from.right().right())
+                        {
+                            moves.push(from.right().right());
+                        }
                     }
                 }
                 (from, moves)
@@ -251,56 +299,6 @@ impl Game {
                         && position.file.abs_diff(target.file) <= 1
                 }
             })
-    }
-
-    /// All possible moves that do not result in check
-    pub fn moves(&self, color: PieceColor) -> impl Iterator<Item = (Position, Vec<Position>)> + '_ {
-        self.potential_moves(color).map(move |(from, mut moves)| {
-            moves.retain(|&to| {
-                let after_move = if self.is_promotion(from, to) {
-                    self.promote(from, to, PieceType::Queen)
-                } else {
-                    self.r#move(from, to)
-                };
-                !after_move.check(color)
-            });
-
-            // handle castling here instead of in potential_moves because it requires checking for check,
-            // which would infinitely recurse if done in potential_moves, and because castling cannot capture
-            // so doesn't need to be included in potential_moves anyway
-            if self
-                .board
-                .get(from)
-                .expect("Game::potential_moves postcondition")
-                .piece
-                == PieceType::King
-            {
-                // queenside castling
-                if self.castling[color].can_castle_queenside()
-                    && self.board.is_vacant(from.left())
-                    && self.board.is_vacant(from.left().left())
-                    && self.board.is_vacant(from.left().left().left())
-                    && !self.attacks(!color, from)
-                    && !self.attacks(!color, from.left())
-                    && !self.attacks(!color, from.left().left())
-                {
-                    moves.push(from.left().left());
-                }
-
-                // kingside castling
-                if self.castling[color].can_castle_kingside()
-                    && self.board.is_vacant(from.right())
-                    && self.board.is_vacant(from.right().right())
-                    && !self.attacks(!color, from)
-                    && !self.attacks(!color, from.right())
-                    && !self.attacks(!color, from.right().right())
-                {
-                    moves.push(from.right().right());
-                }
-            }
-
-            (from, moves)
-        })
     }
 
     /// REQUIRES: there is a piece at `from` and move is not a promotion.

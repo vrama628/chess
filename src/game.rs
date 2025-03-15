@@ -3,12 +3,11 @@ use std::fmt::Display;
 mod board;
 mod castling;
 pub mod piece;
-pub mod position;
 
-use board::Board;
+pub use board::position::Position;
+use board::{position::Movement, Board};
 use castling::Castling;
-use piece::{Piece, PieceColor, PieceType};
-use position::Position;
+pub use piece::{Piece, PieceColor, PieceType};
 
 pub struct Game {
     turn: PieceColor,
@@ -59,7 +58,7 @@ impl Game {
         self.turn
     }
 
-    pub fn get(&self, position: Position) -> Option<&Piece> {
+    pub fn get(&self, position: Position) -> Option<Piece> {
         self.board.get(position)
     }
 
@@ -75,7 +74,7 @@ impl Game {
         };
         self.board
             .iter(color)
-            .map(move |(&from, &Piece { color, piece })| {
+            .map(move |(from, Piece { piece, color: _ })| {
                 let does_not_cause_check = |to: Position| {
                     let after_move = if cfg!(debug_assertions) && self.is_promotion(from, to) {
                         self.promote(from, to, PieceType::Queen)
@@ -85,9 +84,9 @@ impl Game {
                     !after_move.attacks(!color, king_position)
                 };
                 let mut moves = vec![];
-                let mut saturate = |f: &dyn Fn(Position) -> Position| {
-                    let mut to = f(from);
-                    while to.is_valid() {
+                let mut saturate = |f: &dyn Fn(Position) -> Option<Position>| {
+                    let mut to_opt = f(from);
+                    while let Some(to) = to_opt {
                         if let Some(other) = self.board.get(to) {
                             if other.color != color && does_not_cause_check(to) {
                                 moves.push(to);
@@ -96,72 +95,76 @@ impl Game {
                         } else if does_not_cause_check(to) {
                             moves.push(to);
                         }
-                        to = f(to);
+                        to_opt = f(to);
                     }
                 };
                 match piece {
                     PieceType::Pawn => {
-                        let forward = from.pawn(color);
+                        let forward = from.pawn(color).expect("pawn is never on last rank");
                         if self.board.is_vacant(forward) && does_not_cause_check(forward) {
                             moves.push(forward);
                         }
 
-                        let forward_two = forward.pawn(color);
-                        if from.rank == color.pawn_starting_rank()
-                            && self.board.is_vacant(forward)
-                            && self.board.is_vacant(forward_two)
-                            && does_not_cause_check(forward_two)
-                        {
-                            moves.push(forward_two);
+                        if let Some(forward_two) = forward.pawn(color) {
+                            if from.rank() == color.pawn_starting_rank()
+                                && self.board.is_vacant(forward)
+                                && self.board.is_vacant(forward_two)
+                                && does_not_cause_check(forward_two)
+                            {
+                                moves.push(forward_two);
+                            }
                         }
 
-                        let capture_left = forward.left();
-                        if (self
-                            .board
-                            .get(capture_left)
-                            .is_some_and(|other| other.color == !color)
-                            || self.just_advanced_two.is_some_and(|position| {
-                                // en passant
-                                position == from.left()
-                                    && self
-                                        .board
-                                        .get(position)
-                                        .expect("Game::just_advanced_two invariant")
-                                        .color
-                                        == !color
-                            }))
-                            && does_not_cause_check(capture_left)
-                        {
-                            moves.push(capture_left);
+                        if let Some(capture_left) = forward.left() {
+                            if (self
+                                .board
+                                .get(capture_left)
+                                .is_some_and(|other| other.color == !color)
+                                || self.just_advanced_two.is_some_and(|position| {
+                                    // en passant
+                                    position == from.left().expect("rectangle")
+                                        && self
+                                            .board
+                                            .get(position)
+                                            .expect("Game::just_advanced_two invariant")
+                                            .color
+                                            == !color
+                                }))
+                                && does_not_cause_check(capture_left)
+                            {
+                                moves.push(capture_left);
+                            }
                         }
 
-                        let capture_right = forward.right();
-                        if (self
-                            .board
-                            .get(capture_right)
-                            .is_some_and(|other| other.color == !color)
-                            || self.just_advanced_two.is_some_and(|position| {
-                                // en passant
-                                position == from.right()
-                                    && self
-                                        .board
-                                        .get(position)
-                                        .expect("Game::just_advanced_two invariant")
-                                        .color
-                                        == !color
-                            }))
-                            && does_not_cause_check(capture_right)
-                        {
-                            moves.push(capture_right);
+                        if let Some(capture_right) = forward.right() {
+                            if (self
+                                .board
+                                .get(capture_right)
+                                .is_some_and(|other| other.color == !color)
+                                || self.just_advanced_two.is_some_and(|position| {
+                                    // en passant
+                                    position == from.right().expect("rectangle")
+                                        && self
+                                            .board
+                                            .get(position)
+                                            .expect("Game::just_advanced_two invariant")
+                                            .color
+                                            == !color
+                                }))
+                                && does_not_cause_check(capture_right)
+                            {
+                                moves.push(capture_right);
+                            }
                         }
                     }
                     PieceType::Knight => {
-                        let mut try_insert = |to: Position| {
-                            if to.is_valid()
-                                && self.board.get(to).is_none_or(|other| other.color != color)
-                                && does_not_cause_check(to)
-                            {
-                                moves.push(to);
+                        let mut try_insert = |to: Option<Position>| {
+                            if let Some(to) = to {
+                                if self.board.get(to).is_none_or(|other| other.color != color)
+                                    && does_not_cause_check(to)
+                                {
+                                    moves.push(to);
+                                }
                             }
                         };
                         try_insert(from.up().up().left());
@@ -198,12 +201,13 @@ impl Game {
                     PieceType::King => {
                         let does_not_cause_check =
                             |to: Position| !self.r#move(from, to).attacks(!color, to);
-                        let mut try_insert = |to: Position| {
-                            if to.is_valid()
-                                && self.board.get(to).is_none_or(|other| other.color != color)
-                                && does_not_cause_check(to)
-                            {
-                                moves.push(to);
+                        let mut try_insert = |to: Option<Position>| {
+                            if let Some(to) = to {
+                                if self.board.get(to).is_none_or(|other| other.color != color)
+                                    && does_not_cause_check(to)
+                                {
+                                    moves.push(to);
+                                }
                             }
                         };
                         try_insert(from.up());
@@ -215,27 +219,32 @@ impl Game {
                         try_insert(from.left());
                         try_insert(from.up().left());
 
-                        // queenside castling
-                        if self.castling[color].can_castle_queenside()
-                            && self.board.is_vacant(from.left())
-                            && self.board.is_vacant(from.left().left())
-                            && self.board.is_vacant(from.left().left().left())
-                            && !self.attacks(!color, from)
-                            && !self.attacks(!color, from.left())
-                            && !self.attacks(!color, from.left().left())
-                        {
-                            moves.push(from.left().left());
+                        if self.castling[color].can_castle_queenside() {
+                            let left = from.left().expect("castling");
+                            let left_left = left.left().expect("castling");
+                            let left_left_left = left_left.left().expect("castling");
+                            if self.board.is_vacant(left)
+                                && self.board.is_vacant(left_left)
+                                && self.board.is_vacant(left_left_left)
+                                && !self.attacks(!color, from)
+                                && !self.attacks(!color, left)
+                                && !self.attacks(!color, left_left)
+                            {
+                                moves.push(left_left);
+                            }
                         }
 
-                        // kingside castling
-                        if self.castling[color].can_castle_kingside()
-                            && self.board.is_vacant(from.right())
-                            && self.board.is_vacant(from.right().right())
-                            && !self.attacks(!color, from)
-                            && !self.attacks(!color, from.right())
-                            && !self.attacks(!color, from.right().right())
-                        {
-                            moves.push(from.right().right());
+                        if self.castling[color].can_castle_kingside() {
+                            let right = from.right().expect("castling");
+                            let right_right = right.right().expect("castling");
+                            if self.board.is_vacant(right)
+                                && self.board.is_vacant(right_right)
+                                && !self.attacks(!color, from)
+                                && !self.attacks(!color, right)
+                                && !self.attacks(!color, right_right)
+                            {
+                                moves.push(right_right);
+                            }
                         }
                     }
                 }
@@ -244,48 +253,37 @@ impl Game {
     }
 
     fn bishop_attacks(&self, position: Position, target: Position) -> bool {
-        position.rank.abs_diff(target.rank) == position.file.abs_diff(target.file)
-            && (position.rank.min(target.rank)..position.rank.max(target.rank))
-                .zip(position.file.min(target.file)..position.file.max(target.file))
+        position.rank().abs_diff(target.rank()) == position.file().abs_diff(target.file())
+            && (position.rank().min(target.rank())..position.rank().max(target.rank()))
+                .zip(position.file().min(target.file())..position.file().max(target.file()))
                 .skip(1)
-                .all(|(rank, file)| self.get(Position { rank, file }).is_none())
+                .all(|(rank, file)| self.board.is_vacant(Position::new(rank, file)))
     }
 
     fn rook_attacks(&self, position: Position, target: Position) -> bool {
-        (position.rank == target.rank
-            && (position.file.min(target.file)..position.file.max(target.file))
+        (position.rank() == target.rank()
+            && (position.file().min(target.file())..position.file().max(target.file()))
                 .skip(1)
-                .all(|file| {
-                    self.get(Position {
-                        rank: position.rank,
-                        file,
-                    })
-                    .is_none()
-                }))
-            || (position.file == target.file
-                && (position.rank.min(target.rank)..position.rank.max(target.rank))
+                .all(|file| self.get(Position::new(position.rank(), file)).is_none()))
+            || (position.file() == target.file()
+                && (position.rank().min(target.rank())..position.rank().max(target.rank()))
                     .skip(1)
-                    .all(|rank| {
-                        self.get(Position {
-                            rank,
-                            file: position.file,
-                        })
-                        .is_none()
-                    }))
+                    .all(|rank| self.get(Position::new(rank, position.file())).is_none()))
     }
 
     fn attacks(&self, color: PieceColor, target: Position) -> bool {
         self.board
             .iter(color)
-            .any(|(&position, piece)| match piece.piece {
+            .any(|(position, piece)| match piece.piece {
                 PieceType::Pawn => {
-                    let pawn_move = position.pawn(color);
-                    pawn_move.rank == target.rank && pawn_move.file.abs_diff(target.file) == 1
+                    let pawn_move = position.pawn(color).expect("pawn not on last rank");
+                    pawn_move.rank() == target.rank()
+                        && pawn_move.file().abs_diff(target.file()) == 1
                 }
                 PieceType::Knight => matches!(
                     (
-                        position.rank.abs_diff(target.rank),
-                        position.file.abs_diff(target.file),
+                        position.rank().abs_diff(target.rank()),
+                        position.file().abs_diff(target.file()),
                     ),
                     (1, 2) | (2, 1)
                 ),
@@ -295,8 +293,8 @@ impl Game {
                     self.bishop_attacks(position, target) || self.rook_attacks(position, target)
                 }
                 PieceType::King => {
-                    position.rank.abs_diff(target.rank) <= 1
-                        && position.file.abs_diff(target.file) <= 1
+                    position.rank().abs_diff(target.rank()) <= 1
+                        && position.file().abs_diff(target.file()) <= 1
                 }
             })
     }
@@ -309,10 +307,10 @@ impl Game {
         let turn = !self.turn;
         let board = self.board.r#move(from, to);
         let just_advanced_two =
-            (piece.piece == PieceType::Pawn && from.rank.abs_diff(to.rank) == 2).then(|| to);
+            (piece.piece == PieceType::Pawn && from.rank().abs_diff(to.rank()) == 2).then(|| to);
         let mut castling = self.castling;
-        if from.rank == piece.color.piece_starting_rank() {
-            match (piece.piece, from.file) {
+        if from.rank() == piece.color.piece_starting_rank() {
+            match (piece.piece, from.file()) {
                 (PieceType::King, 4) => {
                     castling[piece.color].move_king();
                 }
@@ -350,15 +348,15 @@ impl Game {
     }
 
     pub fn is_promotion(&self, from: Position, to: Position) -> bool {
-        let Some(&Piece {
-            color,
+        let Some(Piece {
             piece: PieceType::Pawn,
+            color,
         }) = self.board.get(from)
         else {
             return false;
         };
         matches!(
-            (color, to.rank),
+            (color, to.rank()),
             (PieceColor::White, 7) | (PieceColor::Black, 0)
         )
     }
@@ -389,7 +387,7 @@ impl Game {
         })
     }
 
-    pub fn iter(&self, color: PieceColor) -> impl Iterator<Item = (&Position, &Piece)> {
+    pub fn iter(&self, color: PieceColor) -> impl Iterator<Item = (Position, Piece)> + '_ {
         self.board.iter(color)
     }
 }

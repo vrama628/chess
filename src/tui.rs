@@ -9,11 +9,7 @@ use std::collections::BTreeMap;
 
 use crate::{
     ai::{self, Move},
-    game::{
-        piece::{PieceColor, PieceType},
-        position::Position,
-        Game, Outcome, PROMOTIONS,
-    },
+    game::{Game, Outcome, PieceColor, PieceType, Position, PROMOTIONS},
 };
 
 pub struct Tui {
@@ -167,7 +163,7 @@ impl Widget for &mut Tui {
         for (rank, rect) in ranks.iter().copied().rev().enumerate() {
             let files = Layout::horizontal([Constraint::Fill(1); 8]).split(rect);
             for (file, rect) in files.iter().copied().enumerate() {
-                let position = Position { rank, file };
+                let position = Position::new(rank as u8, file as u8);
                 let mut line = position.square();
                 if self
                     .last_move

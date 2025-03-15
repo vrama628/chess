@@ -39,14 +39,14 @@ impl PieceColor {
         }
     }
 
-    pub fn pawn_starting_rank(&self) -> usize {
+    pub fn pawn_starting_rank(&self) -> u8 {
         match self {
             Self::White => 1,
             Self::Black => 6,
         }
     }
 
-    pub fn piece_starting_rank(&self) -> usize {
+    pub fn piece_starting_rank(&self) -> u8 {
         match self {
             Self::White => 0,
             Self::Black => 7,

@@ -1,10 +1,6 @@
 use std::cmp::Ordering;
 
-use crate::game::{
-    piece::{PieceColor, PieceType},
-    position::Position,
-    Game, Outcome, PROMOTIONS,
-};
+use crate::game::{Game, Outcome, PieceColor, PieceType, Position, PROMOTIONS};
 
 pub enum Move {
     Move(Position, Position),

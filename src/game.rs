@@ -296,10 +296,9 @@ impl Game {
                         && self.sliding_attacks(position, target)
                 }
                 PieceType::Queen => {
-                    (position.rank().abs_diff(target.rank())
-                        == position.file().abs_diff(target.file())
-                        || position.rank() == target.rank()
-                        || position.file() == target.file())
+                    let d_rank = position.rank().abs_diff(target.rank());
+                    let d_file = position.file().abs_diff(target.file());
+                    (d_rank == d_file || d_rank == 0 || d_file == 0)
                         && self.sliding_attacks(position, target)
                 }
                 PieceType::King => {

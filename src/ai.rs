@@ -77,8 +77,7 @@ fn minimax(
     let mut best: Option<(Move, Evaluation)> = None;
     let turn = game.turn();
     for r#move in game
-        .moves(game.turn())
-        .into_iter()
+        .moves()
         .flat_map(|(from, to)| to.into_iter().map(move |to| (from, to)))
         .flat_map(|(from, to)| {
             if game.is_promotion(from, to) {

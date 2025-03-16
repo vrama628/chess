@@ -1,6 +1,9 @@
 pub mod position;
 
-use std::ops::{Index, IndexMut};
+use std::{
+    fmt::Debug,
+    ops::{Index, IndexMut},
+};
 
 use crate::game::piece::{Piece, PieceColor, PieceType};
 use position::{Movement, Position};
@@ -129,5 +132,34 @@ impl Board {
 
     pub fn is_vacant(&self, position: Position) -> bool {
         self.get(position).is_none()
+    }
+}
+
+impl Debug for Board {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use colored::{Color, Colorize};
+        for rank in (0..8).rev() {
+            write!(f, "{} ", rank + 1)?;
+            for file in 0..8 {
+                let fg = match self[Position::new(rank, file)] {
+                    Some(piece) => {
+                        let color = match piece.color {
+                            PieceColor::White => Color::White,
+                            PieceColor::Black => Color::Black,
+                        };
+                        format!(" {}", piece.piece.render()).color(color)
+                    }
+                    None => "  ".into(),
+                };
+                let bg = if (rank + file) % 2 == 0 {
+                    Color::Green
+                } else {
+                    Color::BrightGreen
+                };
+                write!(f, "{}", fg.on_color(bg))?;
+            }
+            writeln!(f)?;
+        }
+        write!(f, "   a b c d e f g h")
     }
 }

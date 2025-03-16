@@ -1,4 +1,4 @@
-use std::fmt::Display;
+use std::fmt::{Debug, Display};
 
 mod board;
 mod castling;
@@ -64,17 +64,18 @@ impl Game {
 
     /// returns moves that can be made, but without filtering out moves into check
     /// ENSURES: there is a piece at all keys of the returned map
-    pub fn moves(&self, color: PieceColor) -> impl Iterator<Item = (Position, Vec<Position>)> + '_ {
+    pub fn moves(&self) -> impl Iterator<Item = (Position, Vec<Position>)> + '_ {
         let king_position = {
             let king = Piece {
                 piece: PieceType::King,
-                color,
+                color: self.turn,
             };
             self.board.position_of(king).expect("king always exists")
         };
         self.board
-            .iter(color)
-            .map(move |(from, Piece { piece, color: _ })| {
+            .iter(self.turn)
+            .map(move |(from, Piece { piece, color })| {
+                debug_assert_eq!(color, self.turn);
                 let does_not_cause_check = |to: Position| {
                     let after_move = if cfg!(debug_assertions) && self.is_promotion(from, to) {
                         self.promote(from, to, PieceType::Queen)
@@ -252,12 +253,24 @@ impl Game {
             })
     }
 
-    fn bishop_attacks(&self, position: Position, target: Position) -> bool {
-        position.rank().abs_diff(target.rank()) == position.file().abs_diff(target.file())
-            && (position.rank().min(target.rank())..position.rank().max(target.rank()))
-                .zip(position.file().min(target.file())..position.file().max(target.file()))
-                .skip(1)
-                .all(|(rank, file)| self.board.is_vacant(Position::new(rank, file)))
+    fn bishop_attacks(&self, mut position: Position, target: Position) -> bool {
+        if position.rank().abs_diff(target.rank()) != position.file().abs_diff(target.file()) {
+            return false;
+        }
+        let d_rank = target.rank().cmp(&position.rank());
+        let d_file = target.file().cmp(&position.file());
+        loop {
+            position = Position::new(
+                ((position.rank() as i8) + (d_rank as i8)) as u8,
+                ((position.file() as i8) + (d_file as i8)) as u8,
+            );
+            if position == target {
+                return true;
+            }
+            if !self.board.is_vacant(position) {
+                return false;
+            }
+        }
     }
 
     fn rook_attacks(&self, position: Position, target: Position) -> bool {
@@ -361,23 +374,23 @@ impl Game {
         )
     }
 
-    pub fn check(&self, color: PieceColor) -> bool {
+    pub fn check(&self) -> bool {
         let king = Piece {
             piece: PieceType::King,
-            color,
+            color: self.turn,
         };
         let king_position = self.board.position_of(king).expect("king always exists");
-        self.attacks(!color, king_position)
+        self.attacks(!self.turn, king_position)
     }
 
-    fn mate(&self, color: PieceColor) -> bool {
-        self.moves(color).all(|(_, moves)| moves.is_empty())
+    fn mate(&self) -> bool {
+        self.moves().all(|(_, moves)| moves.is_empty())
     }
 
     /// returns None if the game is still in progress
     pub fn status(&self) -> Option<Outcome> {
-        self.mate(self.turn).then(|| {
-            if self.check(self.turn) {
+        self.mate().then(|| {
+            if self.check() {
                 // mate is check
                 Outcome::Win(!self.turn)
             } else {
@@ -389,5 +402,42 @@ impl Game {
 
     pub fn iter(&self, color: PieceColor) -> impl Iterator<Item = (Position, Piece)> + '_ {
         self.board.iter(color)
+    }
+}
+
+impl Debug for Game {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "{} to move", self.turn)?;
+        write!(f, "{:?}", self.board)
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use super::{piece::PieceType, Game};
+
+    #[test]
+    fn moves_and_attacks_are_consistent() {
+        fn rec(game: &Game, depth: usize) {
+            if depth == 0 || game.status().is_some() {
+                return;
+            }
+            for (from, moves) in game.moves() {
+                assert!(game.get(from).is_some_and(|piece| piece.color == game.turn));
+                for to in moves {
+                    if let Some(capture) = game.get(to) {
+                        assert_eq!(capture.color, !game.turn, "capture of wrong color");
+                        assert!(game.attacks(game.turn, to), "Game::moves sees capture {from}->{to} but Game::attacks does not:\n{game:?}")
+                    }
+                    let game = if game.is_promotion(from, to) {
+                        game.promote(from, to, PieceType::Queen)
+                    } else {
+                        game.r#move(from, to)
+                    };
+                    rec(&game, depth - 1)
+                }
+            }
+        }
+        rec(&Game::new(), 3)
     }
 }

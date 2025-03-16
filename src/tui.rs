@@ -129,10 +129,7 @@ impl Tui {
     }
 
     fn select_tile(&mut self, position: Position) {
-        self.selected_tile = self
-            .game
-            .moves(self.game.turn())
-            .find(|(p, _)| *p == position);
+        self.selected_tile = self.game.moves().find(|(p, _)| *p == position);
         self.selected_promotion = None;
     }
 }
@@ -213,7 +210,7 @@ impl Widget for &mut Tui {
             .fg(turn.render())
             .bg(Color::Gray);
         text.push_span(turn_span);
-        if self.game.check(turn) {
+        if self.game.check() {
             let check_line = Line::raw("check").bg(Color::LightRed).fg(Color::Gray);
             text.push_line(check_line);
         }

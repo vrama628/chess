@@ -9,6 +9,7 @@ harness = false
 
 [dependencies]
 clap = { version = "4.5.31", features = ["derive"] }
+colored = "3.0.0"
 ratatui = { version = "0.29.0", features = ["unstable-backend-writer"] }
 rustc-hash = "2.1.1"
 

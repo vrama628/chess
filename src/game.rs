@@ -434,6 +434,6 @@ mod test {
                 }
             }
         }
-        rec(&Game::new(), 3)
+        rec(&Game::new(), 4)
     }
 }

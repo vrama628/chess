@@ -253,10 +253,7 @@ impl Game {
             })
     }
 
-    fn bishop_attacks(&self, mut position: Position, target: Position) -> bool {
-        if position.rank().abs_diff(target.rank()) != position.file().abs_diff(target.file()) {
-            return false;
-        }
+    fn sliding_attacks(&self, mut position: Position, target: Position) -> bool {
         let d_rank = target.rank().cmp(&position.rank());
         let d_file = target.file().cmp(&position.file());
         loop {
@@ -271,17 +268,6 @@ impl Game {
                 return false;
             }
         }
-    }
-
-    fn rook_attacks(&self, position: Position, target: Position) -> bool {
-        (position.rank() == target.rank()
-            && (position.file().min(target.file())..position.file().max(target.file()))
-                .skip(1)
-                .all(|file| self.get(Position::new(position.rank(), file)).is_none()))
-            || (position.file() == target.file()
-                && (position.rank().min(target.rank())..position.rank().max(target.rank()))
-                    .skip(1)
-                    .all(|rank| self.get(Position::new(rank, position.file())).is_none()))
     }
 
     fn attacks(&self, color: PieceColor, target: Position) -> bool {
@@ -300,10 +286,21 @@ impl Game {
                     ),
                     (1, 2) | (2, 1)
                 ),
-                PieceType::Bishop => self.bishop_attacks(position, target),
-                PieceType::Rook => self.rook_attacks(position, target),
+                PieceType::Bishop => {
+                    position.rank().abs_diff(target.rank())
+                        == position.file().abs_diff(target.file())
+                        && self.sliding_attacks(position, target)
+                }
+                PieceType::Rook => {
+                    (position.rank() == target.rank() || position.file() == target.file())
+                        && self.sliding_attacks(position, target)
+                }
                 PieceType::Queen => {
-                    self.bishop_attacks(position, target) || self.rook_attacks(position, target)
+                    (position.rank().abs_diff(target.rank())
+                        == position.file().abs_diff(target.file())
+                        || position.rank() == target.rank()
+                        || position.file() == target.file())
+                        && self.sliding_attacks(position, target)
                 }
                 PieceType::King => {
                     position.rank().abs_diff(target.rank()) <= 1
